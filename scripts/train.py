@@ -15,7 +15,8 @@ from keras.backend.tensorflow_backend import set_session
 from lib.image import read_image
 from lib.keypress import KBHit
 from lib.multithreading import MultiThread
-from lib.utils import get_folder, get_image_paths, deprecation_warning
+from lib.utils import (get_folder, get_image_paths, deprecation_warning, FaceswapError,
+                       _image_extensions)
 from plugins.plugin_loader import PluginLoader
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
@@ -85,21 +86,22 @@ class Train():
                 not self._args.timelapse_input_b and
                 not self._args.timelapse_output):
             return None
-        if not self._args.timelapse_input_a or not self._args.timelapse_input_b:
-            raise ValueError("To enable the timelapse, you have to supply "
-                             "all the parameters (--timelapse-input-A and "
-                             "--timelapse-input-B).")
+        if (not self._args.timelapse_input_a or
+                not self._args.timelapse_input_b or
+                not self._args.timelapse_output):
+            raise FaceswapError("To enable the timelapse, you have to supply all the parameters "
+                                "(--timelapse-input-A, --timelapse-input-B and "
+                                "--timelapse-output).")
 
-        timelapse_output = None
-        if self._args.timelapse_output is not None:
-            timelapse_output = str(get_folder(self._args.timelapse_output))
+        timelapse_output = str(get_folder(self._args.timelapse_output))
 
-        for folder in (self._args.timelapse_input_a,
-                       self._args.timelapse_input_b,
-                       timelapse_output):
+        for folder in (self._args.timelapse_input_a, self._args.timelapse_input_b):
             if folder is not None and not os.path.isdir(folder):
-                raise ValueError("The Timelapse path '{}' does not exist".format(folder))
-
+                raise FaceswapError("The Timelapse path '{}' does not exist".format(folder))
+            exts = [os.path.splitext(fname)[-1] for fname in os.listdir(folder)]
+            if not any(ext in _image_extensions for ext in exts):
+                raise FaceswapError("The Timelapse path '{}' does not contain any valid "
+                                    "images".format(folder))
         kwargs = {"input_a": self._args.timelapse_input_a,
                   "input_b": self._args.timelapse_input_b,
                   "output": timelapse_output}
@@ -121,12 +123,12 @@ class Train():
             image_dir = getattr(self._args, "input_{}".format(side))
             if not os.path.isdir(image_dir):
                 logger.error("Error: '%s' does not exist", image_dir)
-                exit(1)
+                sys.exit(1)
 
             images[side] = get_image_paths(image_dir)
             if not images[side]:
                 logger.error("Error: '%s' contains no images", image_dir)
-                exit(1)
+                sys.exit(1)
 
         logger.info("Model A Directory: %s", self._args.input_a)
         logger.info("Model B Directory: %s", self._args.input_b)
@@ -137,7 +139,7 @@ class Train():
     def process(self):
         """ The entry point for triggering the Training Process.
 
-        Should only be called from  :class:`lib.cli.ScriptExecutor`
+        Should only be called from  :class:`lib.cli.launcher.ScriptExecutor`
         """
         logger.debug("Starting Training Process")
         logger.info("Training data directory: %s", self._args.model_dir)
@@ -147,7 +149,7 @@ class Train():
             deprecation_warning("`-wl`, ``--warp-to-landmarks``",
                                 additional_info="This option will be available within training "
                                                 "config settings (/config/train.ini).")
-        if hasattr(self._args, "no_augment_color") and self._args.no_flip:
+        if hasattr(self._args, "no_augment_color") and self._args.no_augment_color:
             deprecation_warning("`-nac`, ``--no-augment-color``",
                                 additional_info="This option will be available within training "
                                                 "config settings (/config/train.ini).")
@@ -219,7 +221,7 @@ class Train():
                 trainer.clear_tensorboard()
             except KeyboardInterrupt:
                 logger.info("Saving model weights has been cancelled!")
-            exit(0)
+            sys.exit(0)
         except Exception as err:
             raise err
 
@@ -335,8 +337,8 @@ class Train():
         if is_preview:
             logger.info("  Using live preview")
         logger.info("  Press '%s' to save and quit",
-                    "Terminate" if self._args.redirect_gui else "ENTER")
-        if not self._args.redirect_gui:
+                    "Stop" if self._args.redirect_gui or self._args.colab else "ENTER")
+        if not self._args.redirect_gui and not self._args.colab:
             logger.info("  Press 'S' to save model weights immediately")
         logger.info("===================================================")
 

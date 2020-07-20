@@ -85,6 +85,7 @@ class DetectedFace():
         self.y = y  # pylint:disable=invalid-name
         self.h = h  # pylint:disable=invalid-name
         self.landmarks_xy = landmarks_xy
+        self.thumbnail = None
         self.mask = dict() if mask is None else mask
         self.hash = None
 
@@ -153,9 +154,9 @@ class DetectedFace():
         -------
         alignment: dict
             The alignment dict will be returned with the keys ``x``, ``w``, ``y``, ``h``,
-            ``landmarks_xy``, ``mask``, ``hash``.
+            ``landmarks_xy``, ``mask``, ``hash``. The additional key ``thumb`` will be provided
+            if the detected face object contains a thumbnail.
         """
-
         alignment = dict()
         alignment["x"] = self.x
         alignment["w"] = self.w
@@ -164,10 +165,12 @@ class DetectedFace():
         alignment["landmarks_xy"] = self.landmarks_xy
         alignment["hash"] = self.hash
         alignment["mask"] = {name: mask.to_dict() for name, mask in self.mask.items()}
+        if self.thumbnail is not None:
+            alignment["thumb"] = self.thumbnail
         logger.trace("Returning: %s", alignment)
         return alignment
 
-    def from_alignment(self, alignment, image=None):
+    def from_alignment(self, alignment, image=None, with_thumb=False):
         """ Set the attributes of this class from an alignments file and optionally load the face
         into the ``image`` attribute.
 
@@ -176,6 +179,8 @@ class DetectedFace():
         alignment: dict
             A dictionary entry for a face from an alignments file containing the keys
             ``x``, ``w``, ``y``, ``h``, ``landmarks_xy``.
+            Optionally the key ``thumb`` will be provided. This is for use in the manual tool and
+            contains the compressed jpg thumbnail of the face to be allocated to :attr:`thumbnail.
             Optionally the key ``hash`` will be provided, but not all use cases will know the
             face hash at this time.
             Optionally the key ``mask`` will be provided, but legacy alignments will not have
@@ -183,6 +188,9 @@ class DetectedFace():
         image: numpy.ndarray, optional
             If an image is passed in, then the ``image`` attribute will
             be set to the cropped face based on the passed in bounding box co-ordinates
+        with_thumb: bool, optional
+            Whether to load the jpg thumbnail into the detected face object, if provided.
+            Default: ``False``
         """
 
         logger.trace("Creating from alignment: (alignment: %s, has_image: %s)",
@@ -194,10 +202,18 @@ class DetectedFace():
         landmarks = alignment["landmarks_xy"]
         if not isinstance(landmarks, np.ndarray):
             landmarks = np.array(landmarks, dtype="float32")
-        self.landmarks_xy = landmarks
+        self.landmarks_xy = landmarks.copy()
+
+        if with_thumb:
+            # Thumbnails currently only used for manual tool. Default to None
+            self.thumbnail = alignment.get("thumb", None)
         # Manual tool does not know the final hash so default to None
         self.hash = alignment.get("hash", None)
         # Manual tool and legacy alignments will not have a mask
+        self.aligned = dict()
+        self.feed = dict()
+        self.reference = dict()
+
         if alignment.get("mask", None) is not None:
             self.mask = dict()
             for name, mask_dict in alignment["mask"].items():
@@ -216,7 +232,7 @@ class DetectedFace():
                            self.left: self.right]
 
     # <<< Aligned Face methods and properties >>> #
-    def load_aligned(self, image, size=256, dtype=None):
+    def load_aligned(self, image, size=256, dtype=None, force=False):
         """ Align a face from a given image.
 
         Aligning a face is a relatively expensive task and is not required for all uses of
@@ -235,6 +251,8 @@ class DetectedFace():
             The size of the output face in pixels
         dtype: str, optional
             Optionally set a ``dtype`` for the final face to be formatted in. Default: ``None``
+        force: bool, optional
+            Force an update of the aligned face, even if it is already loaded. Default: ``False``
 
         Notes
         -----
@@ -244,7 +262,7 @@ class DetectedFace():
             - :func:`aligned_face`
             - :func:`adjusted_interpolators`
         """
-        if self.aligned:
+        if self.aligned and not force:
             # Don't reload an already aligned face
             logger.trace("Skipping alignment calculation for already aligned face")
         else:
@@ -254,7 +272,7 @@ class DetectedFace():
             self.aligned["padding"] = padding
             self.aligned["matrix"] = get_align_mat(self)
             self.aligned["face"] = None
-        if image is not None and self.aligned["face"] is None:
+        if image is not None and (self.aligned["face"] is None or force):
             logger.trace("Getting aligned face")
             face = AlignerExtract().transform(image, self.aligned["matrix"], size, padding)
             self.aligned["face"] = face if dtype is None else face.astype(dtype)
@@ -519,8 +537,10 @@ class Mask():
         self._affine_matrix = None
         self._interpolator = None
 
+        self._blur = dict()
         self._blur_kernel = 0
         self._threshold = 0.0
+        self.set_blur_and_threshold()
 
     @property
     def mask(self):
@@ -528,15 +548,41 @@ class Mask():
         and threshold amount applied."""
         dims = (self.stored_size, self.stored_size, 1)
         mask = np.frombuffer(decompress(self._mask), dtype="uint8").reshape(dims)
-        if self._threshold != 0.0 or self._blur_kernel != 0:
+        if self._threshold != 0.0 or self._blur["kernel"] != 0:
             mask = mask.copy()
         if self._threshold != 0.0:
             mask[mask < self._threshold] = 0.0
             mask[mask > 255.0 - self._threshold] = 255.0
-        if self._blur_kernel != 0:
-            mask = cv2.GaussianBlur(mask, (self._blur_kernel, self._blur_kernel), 0)[..., None]
+        if self._blur["kernel"] != 0:
+            mask = BlurMask(self._blur["type"],
+                            mask,
+                            self._blur["kernel"],
+                            passes=self._blur["passes"]).blurred
         logger.trace("mask shape: %s", mask.shape)
         return mask
+
+    @property
+    def original_roi(self):
+        """ :class: `numpy.ndarray`: The original region of interest of the mask in the
+        source frame. """
+        points = np.array([[0, 0],
+                           [0, self.stored_size - 1],
+                           [self.stored_size - 1, self.stored_size - 1],
+                           [self.stored_size - 1, 0]], np.int32).reshape((-1, 1, 2))
+        matrix = cv2.invertAffineTransform(self._affine_matrix)
+        roi = cv2.transform(points, matrix).reshape((4, 2))
+        logger.trace("Returning: %s", roi)
+        return roi
+
+    @property
+    def affine_matrix(self):
+        """ :class: `numpy.ndarray`: The affine matrix to transpose the mask to a full frame. """
+        return self._affine_matrix
+
+    @property
+    def interpolator(self):
+        """ int: The cv2 interpolator required to transpose the mask to a full frame. """
+        return self._interpolator
 
     def get_full_frame_mask(self, width, height):
         """ Return the stored mask in a full size frame of the given dimensions
@@ -583,12 +629,24 @@ class Mask():
                      affine_matrix, mask.max(), interpolator)
         self._affine_matrix = self._adjust_affine_matrix(mask.shape[0], affine_matrix)
         self._interpolator = interpolator
+        self.replace_mask(mask)
+
+    def replace_mask(self, mask):
+        """ Replace the existing :attr:`_mask` with the given mask.
+
+        Parameters
+        ----------
+        mask: numpy.ndarray
+            The mask that is to be added as output from :mod:`plugins.extract.mask`.
+            It should be in the range 0.0 - 1.0 ideally with a ``dtype`` of ``float32``
+        """
         mask = (cv2.resize(mask,
                            (self.stored_size, self.stored_size),
                            interpolation=cv2.INTER_AREA) * 255.0).astype("uint8")
         self._mask = compress(mask)
 
-    def set_blur_kernel_and_threshold(self, blur_kernel=0, threshold=0):
+    def set_blur_and_threshold(self,
+                               blur_kernel=0, blur_type="gaussian", blur_passes=1, threshold=0):
         """ Set the internal blur kernel and threshold amount for returned masks
 
         Parameters
@@ -597,15 +655,20 @@ class Mask():
             The kernel size, in pixels to apply gaussian blurring to the mask. Set to 0 for no
             blurring. Should be odd, if an even number is passed in (outside of 0) then it is
             rounded up to the next odd number. Default: 0
+        blur_type: ["gaussian", "normalized"], optional
+            The blur type to use. ``gaussian`` or ``normalized`` box filter. Default: ``gaussian``
+        blur_passes: int, optional
+            The number of passed to perform when blurring. Default: 1
         threshold: int, optional
             The threshold amount to minimize/maximize mask values to 0 and 100. Percentage value.
             Default: 0
         """
         logger.trace("blur_kernel: %s, threshold: %s", blur_kernel, threshold)
-        if blur_kernel == 0 or blur_kernel % 2 == 1:
-            self._blur_kernel = blur_kernel
-        else:
-            self._blur_kernel = blur_kernel + 1
+        if blur_type is not None:
+            blur_kernel += 0 if blur_kernel == 0 or blur_kernel % 2 == 1 else 1
+            self._blur["kernel"] = blur_kernel
+            self._blur["type"] = blur_type
+            self._blur["passes"] = blur_passes
         self._threshold = (threshold / 100.0) * 255.0
 
     def _adjust_affine_matrix(self, mask_size, affine_matrix):
@@ -675,4 +738,146 @@ class Mask():
         """
         retval = "_{}".format(dict_key) if dict_key != "stored_size" else dict_key
         logger.trace("dict_key: %s, attribute_name: %s", dict_key, retval)
+        return retval
+
+
+class BlurMask():
+    """ Factory class to return the correct blur object for requested blur type.
+
+    Works for square images only. Currently supports Gaussian and Normalized Box Filters.
+
+    Parameters
+    ----------
+    blur_type: ["gaussian", "normalized"]
+        The type of blur to use
+    mask: :class:`numpy.ndarray`
+        The mask to apply the blur to
+    kernel: int or float
+        Either the kernel size (in pixels) or the size of the kernel as a ratio of mask size
+    is_ratio: bool, optional
+        Whether the given :attr:`kernel` parameter is a ratio or not. If ``True`` then the
+        actual kernel size will be calculated from the given ratio and the mask size. If
+        ``False`` then the kernel size will be set directly from the :attr:`kernel` parameter.
+        Default: ``False``
+    passes: int, optional
+        The number of passes to perform when blurring. Default: ``1``
+
+    Example
+    -------
+    >>> print(mask.shape)
+    (128, 128, 1)
+    >>> new_mask = BlurMask("gaussian", mask, 3, is_ratio=False, passes=1).blurred
+    >>> print(new_mask.shape)
+    (128, 128, 1)
+    """
+    def __init__(self, blur_type, mask, kernel, is_ratio=False, passes=1):
+        logger.trace("Initializing %s: (blur_type: '%s', mask_shape: %s, kernel: %s, "
+                     "is_ratio: %s, passes: %s)", self.__class__.__name__, blur_type, mask.shape,
+                     kernel, is_ratio, passes)
+        self._blur_type = blur_type.lower()
+        self._mask = mask
+        self._passes = passes
+        kernel_size = self._get_kernel_size(kernel, is_ratio)
+        self._kernel_size = self._get_kernel_tuple(kernel_size)
+        logger.trace("Initialized %s", self.__class__.__name__)
+
+    @property
+    def blurred(self):
+        """ :class:`numpy.ndarray`: The final mask with blurring applied. """
+        func = self._func_mapping[self._blur_type]
+        kwargs = self._get_kwargs()
+        blurred = self._mask
+        for i in range(self._passes):
+            ksize = int(kwargs["ksize"][0])
+            logger.trace("Pass: %s, kernel_size: %s", i + 1, (ksize, ksize))
+            blurred = func(blurred, **kwargs)
+            ksize = int(round(ksize * self._multipass_factor))
+            kwargs["ksize"] = self._get_kernel_tuple(ksize)
+        blurred = blurred[..., None]
+        logger.trace("Returning blurred mask. Shape: %s", blurred.shape)
+        return blurred
+
+    @property
+    def _multipass_factor(self):
+        """ For multiple passes the kernel must be scaled down. This value is
+            different for box filter and gaussian """
+        factor = dict(gaussian=0.8, normalized=0.5)
+        return factor[self._blur_type]
+
+    @property
+    def _sigma(self):
+        """ int: The Sigma for Gaussian Blur. Returns 0 to force calculation from kernel size. """
+        return 0
+
+    @property
+    def _func_mapping(self):
+        """ dict: :attr:`_blur_type` mapped to cv2 Function name. """
+        return dict(gaussian=cv2.GaussianBlur,  # pylint: disable = no-member
+                    normalized=cv2.blur)  # pylint: disable = no-member
+
+    @property
+    def _kwarg_requirements(self):
+        """ dict: :attr:`_blur_type` mapped to cv2 Function required keyword arguments. """
+        return dict(gaussian=["ksize", "sigmaX"],
+                    normalized=["ksize"])
+
+    @property
+    def _kwarg_mapping(self):
+        """ dict: cv2 function keyword arguments mapped to their parameters. """
+        return dict(ksize=self._kernel_size,
+                    sigmaX=self._sigma)
+
+    def _get_kernel_size(self, kernel, is_ratio):
+        """ Set the kernel size to absolute value.
+
+        If :attr:`is_ratio` is ``True`` then the kernel size is calculated from the given ratio and
+        the :attr:`_mask` size, otherwise the given kernel size is just returned.
+
+        Parameters
+        ----------
+        kernel: int or float
+            Either the kernel size (in pixels) or the size of the kernel as a ratio of mask size
+        is_ratio: bool, optional
+            Whether the given :attr:`kernel` parameter is a ratio or not. If ``True`` then the
+            actual kernel size will be calculated from the given ratio and the mask size. If
+            ``False`` then the kernel size will be set directly from the :attr:`kernel` parameter.
+
+        Returns
+        -------
+        int
+            The size (in pixels) of the blur kernel
+        """
+        if not is_ratio:
+            return kernel
+
+        mask_diameter = np.sqrt(np.sum(self._mask))
+        radius = round(max(1., mask_diameter * kernel / 100.))
+        kernel_size = int(radius * 2 + 1)
+        logger.trace("kernel_size: %s", kernel_size)
+        return kernel_size
+
+    @staticmethod
+    def _get_kernel_tuple(kernel_size):
+        """ Make sure kernel_size is odd and return it as a tuple.
+
+        Parameters
+        ----------
+        kernel_size: int
+            The size in pixels of the blur kernel
+
+        Returns
+        -------
+        tuple
+            The kernel size as a tuple of ('int', 'int')
+        """
+        kernel_size += 1 if kernel_size % 2 == 0 else 0
+        retval = (kernel_size, kernel_size)
+        logger.trace(retval)
+        return retval
+
+    def _get_kwargs(self):
+        """ dict: the valid keyword arguments for the requested :attr:`_blur_type` """
+        retval = {kword: self._kwarg_mapping[kword]
+                  for kword in self._kwarg_requirements[self._blur_type]}
+        logger.trace("BlurMask kwargs: %s", retval)
         return retval

@@ -245,9 +245,8 @@ class TrainerBase():
         output = ["Loss {}: {:.5f}".format(side.capitalize(), loss[side][0])
                   for side in sorted(loss.keys())]
         output = ", ".join(output)
-        print("[{}] [#{:05d}] {}".format(self._timestamp,
-                                         self._model.iterations,
-                                         output), end='\r')
+        output = "[{}] [#{:05d}] {}".format(self._timestamp, self._model.iterations, output)
+        print("\r{}".format(output), end="")
 
     def train_one_step(self, viewer, timelapse_kwargs):
         """ Running training on a batch of images for each side.
@@ -1119,8 +1118,8 @@ class TrainingAlignments():
         masks = dict()
         for fhash, face in detected_faces.items():
             mask = face.mask[self._training_opts["mask_type"]]
-            mask.set_blur_kernel_and_threshold(blur_kernel=self._training_opts["mask_blur_kernel"],
-                                               threshold=self._training_opts["mask_threshold"])
+            mask.set_blur_and_threshold(blur_kernel=self._training_opts["mask_blur_kernel"],
+                                        threshold=self._training_opts["mask_threshold"])
             for filename in self._hash_to_filenames(side, fhash):
                 masks[filename] = mask
         return masks

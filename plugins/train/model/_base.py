@@ -83,8 +83,7 @@ class ModelBase():
                            self.vram_savings.pingpong,
                            training_image_size)
 
-        self.blocks = NNBlocks(use_subpixel=self.config["subpixel_upscaling"],
-                               use_icnr_init=self.config["icnr_init"],
+        self.blocks = NNBlocks(use_icnr_init=self.config["icnr_init"],
                                use_convaware_init=self.config["conv_aware_init"],
                                use_reflect_padding=self.config["reflect_padding"],
                                first_run=self.state.first_run)
@@ -377,9 +376,9 @@ class ModelBase():
         opt_kwargs = dict(lr=lr, beta_1=beta_1, beta_2=beta_2)
         if (self.config.get("clipnorm", False) and
                 keras.backend.backend() != "plaidml.keras.backend"):
-            # NB: Clipnorm is ballooning VRAM usage, which is not expected behavior
-            # and may be a bug in Keras/TF.
-            # PlaidML has a bug regarding the clipnorm parameter
+            # NB: Clip-norm is ballooning VRAM usage, which is not expected behavior
+            # and may be a bug in Keras/Tensorflow.
+            # PlaidML has a bug regarding the clip-norm parameter
             # See: https://github.com/plaidml/plaidml/issues/228
             # Workaround by simply removing it.
             # TODO: Remove this as soon it is fixed in PlaidML.
@@ -464,6 +463,8 @@ class ModelBase():
     def save_models(self):
         """ Backup and save the models """
         logger.debug("Backing up and saving models")
+        # Insert a new line to avoid spamming the same row as loss output
+        print("")
         save_averages = self.get_save_averages()
         backup_func = self.backup.backup_model if self.should_backup(save_averages) else None
         if backup_func:
@@ -579,7 +580,6 @@ class ModelBase():
         self.state.inputs = {"face:0": [64, 64, 3]}
         self.state.training_size = 256
         self.state.config["coverage"] = 62.5
-        self.state.config["subpixel_upscaling"] = False
         self.state.config["reflect_padding"] = False
         self.state.config["mask_type"] = None
         self.state.config["mask_blur_kernel"] = 3
@@ -1011,8 +1011,8 @@ class State():
             * loss - If old `dssim_loss` is ``true`` set new `loss_function` to `ssim` otherwise
             set it to `mae`. Remove old `dssim_loss` item
 
-            * masks - If `penalized_mask_loss` exists but `learn_mask` does not, then add the
-            latter and set to the same value as `penalized_mask_loss`.
+            * masks - If `learn_mask` does not exist then it is set to ``True`` if `mask_type` is
+            not ``None`` otherwise it is set to ``False``.
 
             * masks type - Replace removed masks 'dfl_full' and 'facehull' with `components` mask
 
@@ -1022,7 +1022,7 @@ class State():
             ``True`` if legacy items exist and state file has been updated, otherwise ``False``
         """
         logger.debug("Checking for legacy state file update")
-        priors = ["dssim_loss", "penalized_mask_loss", "mask_type"]
+        priors = ["dssim_loss", "mask_type", "mask_type"]
         new_items = ["loss_function", "learn_mask", "mask_type"]
         updated = False
         for old, new in zip(priors, new_items):
@@ -1040,15 +1040,16 @@ class State():
                 continue
 
             # Add learn mask option and set to True if model has "penalized_mask_loss" specified
-            if old == "penalized_mask_loss" and new not in self.config:
-                self.config[new] = self.config["penalized_mask_loss"]
+            if old == "mask_type" and new == "learn_mask" and new not in self.config:
+                self.config[new] = self.config["mask_type"] is not None
                 updated = True
                 logger.info("Added new 'learn_mask' config item for this model. Value set to: %s",
                             self.config[new])
                 continue
 
             # Replace removed masks with most similar equivalent
-            if old == "mask_type" and self.config[old] in ("facehull", "dfl_full"):
+            if old == "mask_type" and new == "mask_type" and self.config[old] in ("facehull",
+                                                                                  "dfl_full"):
                 old_mask = self.config[old]
                 self.config[new] = "components"
                 updated = True

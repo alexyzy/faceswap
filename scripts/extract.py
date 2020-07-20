@@ -7,17 +7,17 @@ import sys
 
 from tqdm import tqdm
 
-from lib.image import encode_image_with_hash, ImagesLoader, ImagesSaver
+from lib.image import encode_image_with_hash, generate_thumbnail, ImagesLoader, ImagesSaver
 from lib.multithreading import MultiThread
 from lib.utils import get_folder
 from plugins.extract.pipeline import Extractor, ExtractMedia
-from scripts.fsmedia import Alignments, PostProcess, Utils
+from scripts.fsmedia import Alignments, PostProcess, finalize
 
 tqdm.monitor_interval = 0  # workaround for TqdmSynchronisationWarning
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
-class Extract():
+class Extract():  # pylint:disable=too-few-public-methods
     """ The Faceswap Face Extraction Process.
 
     The extraction process is responsible for detecting faces in a series of images/video, aligning
@@ -38,11 +38,10 @@ class Extract():
     def __init__(self, arguments):
         logger.debug("Initializing %s: (args: %s", self.__class__.__name__, arguments)
         self._args = arguments
-
         self._output_dir = str(get_folder(self._args.output_dir))
 
         logger.info("Output Directory: %s", self._args.output_dir)
-        self._images = ImagesLoader(self._args.input_dir, load_with_hash=False, fast_count=True)
+        self._images = ImagesLoader(self._args.input_dir, fast_count=True)
         self._alignments = Alignments(self._args, True, self._images.is_video)
 
         self._existing_count = 0
@@ -51,9 +50,12 @@ class Extract():
         self._post_process = PostProcess(arguments)
         configfile = self._args.configfile if hasattr(self._args, "configfile") else None
         normalization = None if self._args.normalization == "none" else self._args.normalization
+
+        maskers = ["components", "extended"]
+        maskers += self._args.masker if self._args.masker else []
         self._extractor = Extractor(self._args.detector,
                                     self._args.aligner,
-                                    self._args.masker,
+                                    maskers,
                                     configfile=configfile,
                                     multiprocess=not self._args.singleprocess,
                                     rotate_images=self._args.rotate_images,
@@ -106,7 +108,7 @@ class Extract():
     def process(self):
         """ The entry point for triggering the Extraction Process.
 
-        Should only be called from  :class:`lib.cli.ScriptExecutor`
+        Should only be called from  :class:`lib.cli.launcher.ScriptExecutor`
         """
         logger.info('Starting, this may take a while...')
         # from lib.queue_manager import queue_manager ; queue_manager.debug_monitor(3)
@@ -115,9 +117,9 @@ class Extract():
         for thread in self._threads:
             thread.join()
         self._alignments.save()
-        Utils.finalize(self._images.process_count + self._existing_count,
-                       self._alignments.faces_count,
-                       self._verify_output)
+        finalize(self._images.process_count + self._existing_count,
+                 self._alignments.faces_count,
+                 self._verify_output)
 
     def _threaded_redirector(self, task, io_args=None):
         """ Redirect image input/output tasks to relevant queues in background thread
@@ -199,9 +201,10 @@ class Extract():
             detected_faces = dict()
             self._extractor.launch()
             self._check_thread_error()
+            ph_desc = "Extraction" if self._extractor.passes == 1 else self._extractor.phase_text
             desc = "Running pass {} of {}: {}".format(phase + 1,
                                                       self._extractor.passes,
-                                                      self._extractor.phase.title())
+                                                      ph_desc)
             status_bar = tqdm(self._extractor.detected_faces(),
                               total=self._images.process_count,
                               file=sys.stdout,
@@ -210,7 +213,8 @@ class Extract():
                 self._check_thread_error()
                 if is_final:
                     self._output_processing(extract_media, size)
-                    self._output_faces(saver, extract_media)
+                    if not self._args.skip_saving_faces:
+                        self._output_faces(saver, extract_media)
                     if self._save_interval and (idx + 1) % self._save_interval == 0:
                         self._alignments.save()
                 else:
@@ -232,7 +236,8 @@ class Extract():
     def _output_processing(self, extract_media, size):
         """ Prepare faces for output
 
-        Loads the aligned face, perform any processing actions and verify the output.
+        Loads the aligned face, generate the thumbnail, perform any processing actions and verify
+        the output.
 
         Parameters
         ----------
@@ -243,7 +248,7 @@ class Extract():
         """
         for face in extract_media.detected_faces:
             face.load_aligned(extract_media.image, size=size)
-
+            face.thumbnail = generate_thumbnail(face.aligned_face, size=80, quality=60)
         self._post_process.do_actions(extract_media)
         extract_media.remove_image()
 
@@ -278,5 +283,5 @@ class Extract():
 
             saver.save(output_filename, image)
             final_faces.append(face.to_alignment())
-        self._alignments.data[os.path.basename(extract_media.filename)] = final_faces
+        self._alignments.data[os.path.basename(extract_media.filename)] = dict(faces=final_faces)
         del extract_media

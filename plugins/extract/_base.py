@@ -65,7 +65,10 @@ class Extractor():
     ----------------
     configfile: str, optional
         Path to a custom configuration ``ini`` file. Default: Use system configfile
-
+    instance: int, optional
+        If this plugin is being executed multiple times (i.e. multiple pipelines have been
+        launched), the instance of the plugin must be passed in for naming convention reasons.
+        Default: 0
 
     The following attributes should be set in the plugin's :func:`__init__` method after
     initializing the parent.
@@ -77,7 +80,7 @@ class Extractor():
     input_size: int
         The input size to the model in pixels across one edge. The input size should always be
         square.
-    colorformat: str
+    color_format: str
         Color format for model. Must be ``'BGR'``, ``'RGB'`` or ``'GRAY'``. Defaults to ``'BGR'``
         if not explicitly set.
     vram: int
@@ -98,11 +101,12 @@ class Extractor():
     plugins.extract.pipeline : The extract pipeline that configures and calls all plugins
 
     """
-    def __init__(self, git_model_id=None, model_filename=None, configfile=None):
-        logger.debug("Initializing %s: (git_model_id: %s, model_filename: %s, "
-                     " configfile: %s)", self.__class__.__name__, git_model_id,
-                     model_filename, configfile)
+    def __init__(self, git_model_id=None, model_filename=None, configfile=None, instance=0):
+        logger.debug("Initializing %s: (git_model_id: %s, model_filename: %s, instance: %s, "
+                     "configfile: %s, )", self.__class__.__name__, git_model_id, model_filename,
+                     instance, configfile)
 
+        self._instance = instance
         self.config = _get_config(".".join(self.__module__.split(".")[-2:]), configfile=configfile)
         """ dict: Config for this plugin, loaded from ``extract.ini`` configfile """
 
@@ -113,7 +117,7 @@ class Extractor():
         # << SET THE FOLLOWING IN PLUGINS __init__ IF DIFFERENT FROM DEFAULT >> #
         self.name = None
         self.input_size = None
-        self.colorformat = "BGR"
+        self.color_format = "BGR"
         self.vram = None
         self.vram_warnings = None  # Will run at this with warnings
         self.vram_per_batch = None
@@ -328,7 +332,10 @@ class Extractor():
                      self.__class__.__name__, args, kwargs)
         logger.info("Initializing %s (%s)...", self.name, self._plugin_type.title())
         self.queue_size = 1
-        self._add_queues(kwargs["in_queue"], kwargs["out_queue"], ["predict", "post"])
+        name = self.name.replace(" ", "_").lower()
+        self._add_queues(kwargs["in_queue"],
+                         kwargs["out_queue"],
+                         ["predict_{}".format(name), "post_{}".format(name)])
         self._compile_threads()
         try:
             self.init_model()
@@ -355,24 +362,26 @@ class Extractor():
         self._queues["out"] = out_queue
         for q_name in queues:
             self._queues[q_name] = queue_manager.get_queue(
-                name="{}_{}".format(self._plugin_type, q_name),
+                name="{}{}_{}".format(self._plugin_type, self._instance, q_name),
                 maxsize=self.queue_size)
 
     # <<< THREAD METHODS >>> #
     def _compile_threads(self):
         """ Compile the threads into self._threads list """
         logger.debug("Compiling %s threads", self._plugin_type)
-        self._add_thread("{}_input".format(self._plugin_type),
+        name = self.name.replace(" ", "_").lower()
+        base_name = "{}_{}".format(self._plugin_type, name)
+        self._add_thread("{}_input".format(base_name),
                          self.process_input,
                          self._queues["in"],
-                         self._queues["predict"])
-        self._add_thread("{}_predict".format(self._plugin_type),
+                         self._queues["predict_{}".format(name)])
+        self._add_thread("{}_predict".format(base_name),
                          self._predict,
-                         self._queues["predict"],
-                         self._queues["post"])
-        self._add_thread("{}_output".format(self._plugin_type),
+                         self._queues["predict_{}".format(name)],
+                         self._queues["post_{}".format(name)])
+        self._add_thread("{}_output".format(base_name),
                          self.process_output,
-                         self._queues["post"],
+                         self._queues["post_{}".format(name)],
                          self._queues["out"])
         logger.debug("Compiled %s threads: %s", self._plugin_type, self._threads)
 

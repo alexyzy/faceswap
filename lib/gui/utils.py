@@ -86,20 +86,21 @@ class FileHandler():  # pylint:disable=too-few-public-methods
 
     Parameters
     ----------
-    handletype: ['open', 'save', 'filename', 'filename_multi', 'savefilename', 'context']
+    handle_type: ['open', 'save', 'filename', 'filename_multi', 'savefilename', 'context', `dir`]
         The type of file dialog to return. `open` and `save` will perform the open and save actions
         and return the file. `filename` returns the filename from an `open` dialog.
         `filename_multi` allows for multi-selection of files and returns a list of files selected.
         `savefilename` returns the filename from a `save as` dialog. `context` is a context
-        sensitive parameter that returns a certain dialog based on the current options
-    filetype: ['default', 'alignments', 'config_project', 'config_task', 'config_all', 'csv', \
+        sensitive parameter that returns a certain dialog based on the current options. `dir` asks
+        for a folder location.
+    file_type: ['default', 'alignments', 'config_project', 'config_task', 'config_all', 'csv', \
                'image', 'ini', 'state', 'log', 'video']
         The type of file that this dialog is for. `default` allows selection of any files. Other
         options limit the file type selection
     title: str, optional
         The title to display on the file dialog. If `None` then the default title will be used.
         Default: ``None``
-    initialdir: str, optional
+    initial_folder: str, optional
         The folder to initially open with the file dialog. If `None` then tkinter will decide.
         Default: ``None``
     command: str, optional
@@ -123,15 +124,20 @@ class FileHandler():  # pylint:disable=too-few-public-methods
     '/path/to/selected/video.mp4'
     """
 
-    def __init__(self, handletype, filetype, title=None, initialdir=None, command=None,
+    def __init__(self, handle_type, file_type, title=None, initial_folder=None, command=None,
                  action=None, variable=None):
-        logger.debug("Initializing %s: (Handletype: '%s', filetype: '%s', title: '%s', "
-                     "initialdir: '%s, 'command: '%s', action: '%s', variable: %s)",
-                     self.__class__.__name__, handletype, filetype, title, initialdir, command,
-                     action, variable)
-        self._handletype = handletype
+        logger.debug("Initializing %s: (handle_type: '%s', file_type: '%s', title: '%s', "
+                     "initial_folder: '%s, 'command: '%s', action: '%s', variable: %s)",
+                     self.__class__.__name__, handle_type, file_type, title, initial_folder,
+                     command, action, variable)
+        self._handletype = handle_type
         self._defaults = self._set_defaults()
-        self._kwargs = self._set_kwargs(title, initialdir, filetype, command, action, variable)
+        self._kwargs = self._set_kwargs(title,
+                                        initial_folder,
+                                        file_type,
+                                        command,
+                                        action,
+                                        variable)
         self.retfile = getattr(self, "_{}".format(self._handletype.lower()))()
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -140,7 +146,7 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         """ dict: The accepted extensions for each file type for opening/saving """
         all_files = ("All files", "*.*")
         filetypes = {"default": (all_files,),
-                     "alignments": [("Faceswap Alignments", "*.fsa *.json"),
+                     "alignments": [("Faceswap Alignments", "*.fsa"),
                                     all_files],
                      "config_project": [("Faceswap Project files", "*.fsw"), all_files],
                      "config_task": [("Faceswap Task files", "*.fst"), all_files],
@@ -1043,6 +1049,35 @@ class Config():
         title = "Faceswap.py"
         title += " - {}".format(text) if text is not None and text else ""
         self.root.title(title)
+
+    def set_geometry(self, width, height, fullscreen=False):
+        """ Set the geometry for the root tkinter object.
+
+        Parameters
+        ----------
+        width: int
+            The width to set the window to (prior to scaling)
+        height: int
+            The height to set the window to (prior to scaling)
+        fullscreen: bool, optional
+            Whether to set the window to full-screen mode. If ``True`` then :attr:`width` and
+            :attr:`height` are ignored. Default: ``False``
+        """
+        self.root.tk.call("tk", "scaling", self.scaling_factor)
+        if fullscreen:
+            initial_dimensions = (self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        else:
+            initial_dimensions = (round(width * self.scaling_factor),
+                                  round(height * self.scaling_factor))
+
+        if fullscreen and sys.platform == "win32":
+            self.root.state('zoomed')
+        elif fullscreen:
+            self.root.attributes('-zoomed', True)
+        else:
+            self.root.geometry("{}x{}+80+80".format(str(initial_dimensions[0]),
+                                                    str(initial_dimensions[1])))
+        logger.debug("Geometry: %sx%s", *initial_dimensions)
 
 
 class LongRunningTask(Thread):
