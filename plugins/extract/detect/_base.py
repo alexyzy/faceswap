@@ -14,12 +14,15 @@ For each source frame, the plugin must pass a dict to finalize containing:
 To get a :class:`~lib.faces_detect.DetectedFace` object use the function:
 
 >>> face = self.to_detected_face(<face left>, <face top>, <face right>, <face bottom>)
-
 """
 import cv2
 import numpy as np
 
+from tensorflow.python import errors_impl as tf_errors  # pylint:disable=no-name-in-module
+
 from lib.faces_detect import DetectedFace
+from lib.utils import get_backend, FaceswapError
+
 from plugins.extract._base import Extractor, logger
 
 
@@ -58,13 +61,14 @@ class Detector(Extractor):  # pylint:disable=abstract-method
     """
 
     def __init__(self, git_model_id=None, model_filename=None,
-                 configfile=None, instance=0, rotation=None, min_size=0):
+                 configfile=None, instance=0, rotation=None, min_size=0, **kwargs):
         logger.debug("Initializing %s: (rotation: %s, min_size: %s)", self.__class__.__name__,
                      rotation, min_size)
         super().__init__(git_model_id,
                          model_filename,
                          configfile=configfile,
-                         instance=instance)
+                         instance=instance,
+                         **kwargs)
         self.rotation = self._get_rotation_angles(rotation)
         self.min_size = min_size
 
@@ -204,7 +208,35 @@ class Detector(Extractor):  # pylint:disable=abstract-method
         for angle in self.rotation:
             # Rotate the batch and insert placeholders for already found faces
             self._rotate_batch(batch, angle)
-            batch = self.predict(batch)
+            try:
+                batch = self.predict(batch)
+            except tf_errors.ResourceExhaustedError as err:
+                msg = ("You do not have enough GPU memory available to run detection at the "
+                       "selected batch size. You can try a number of things:"
+                       "\n1) Close any other application that is using your GPU (web browsers are "
+                       "particularly bad for this)."
+                       "\n2) Lower the batchsize (the amount of images fed into the model) by "
+                       "editing the plugin settings (GUI: Settings > Configure extract settings, "
+                       "CLI: Edit the file faceswap/config/extract.ini)."
+                       "\n3) Enable 'Single Process' mode.")
+                raise FaceswapError(msg) from err
+            except Exception as err:
+                if get_backend() == "amd":
+                    # pylint:disable=import-outside-toplevel
+                    from lib.plaidml_utils import is_plaidml_error
+                    if (is_plaidml_error(err) and (
+                            "CL_MEM_OBJECT_ALLOCATION_FAILURE" in str(err).upper() or
+                            "enough memory for the current schedule" in str(err).lower())):
+                        msg = ("You do not have enough GPU memory available to run detection at "
+                               "the selected batch size. You can try a number of things:"
+                               "\n1) Close any other application that is using your GPU (web "
+                               "browsers are particularly bad for this)."
+                               "\n2) Lower the batchsize (the amount of images fed into the "
+                               "model) by editing the plugin settings (GUI: Settings > Configure "
+                               "extract settings, CLI: Edit the file "
+                               "faceswap/config/extract.ini).")
+                        raise FaceswapError(msg) from err
+                raise
 
             if angle != 0 and any([face.any() for face in batch["prediction"]]):
                 logger.verbose("found face(s) by rotating image %s degrees", angle)

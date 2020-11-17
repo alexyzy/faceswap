@@ -11,8 +11,6 @@ from time import sleep
 import cv2
 import numpy as np
 from tqdm import tqdm
-import tensorflow as tf
-from keras.backend.tensorflow_backend import set_session
 
 from scripts.fsmedia import Alignments, PostProcess, finalize
 from lib.serializer import get_serializer
@@ -647,7 +645,6 @@ class Predict():
     def __init__(self, in_queue, queue_size, arguments):
         logger.debug("Initializing %s: (args: %s, queue_size: %s, in_queue: %s)",
                      self.__class__.__name__, arguments, queue_size, in_queue)
-        self._batchsize = self._get_batchsize(queue_size)
         self._args = arguments
         self._in_queue = in_queue
         self._out_queue = queue_manager.get_queue("patch")
@@ -655,13 +652,11 @@ class Predict():
         self._faces_count = 0
         self._verify_output = False
 
-        if arguments.allow_growth:
-            self._set_tf_allow_growth()
-
         self._model = self._load_model()
-        self._output_indices = {"face": self._model.largest_face_index,
-                                "mask": self._model.largest_mask_index}
-        self._predictor = self._model.converter(self._args.swap_model)
+        self._batchsize = self._get_batchsize(queue_size)
+        self._sizes = self._get_io_sizes()
+        self._coverage_ratio = self._model.coverage_ratio
+
         self._thread = self._launch_predictor()
         logger.debug("Initialized %s: (out_queue: %s)", self.__class__.__name__, self._out_queue)
 
@@ -694,62 +689,33 @@ class Predict():
     @property
     def coverage_ratio(self):
         """ float: The coverage ratio that the model was trained at. """
-        return self._model.training_opts["coverage_ratio"]
+        return self._coverage_ratio
 
     @property
     def has_predicted_mask(self):
         """ bool: ``True`` if the model was trained to learn a mask, otherwise ``False``. """
-        return bool(self._model.state.config.get("learn_mask", False))
+        return bool(self._model.config.get("learn_mask", False))
 
     @property
     def output_size(self):
         """ int: The size in pixels of the Faceswap model output. """
-        return self._model.output_shape[0]
+        return self._sizes["output"]
 
-    @property
-    def _input_size(self):
-        """ int: The size in pixels of the Faceswap model input. """
-        return self._model.input_shape[0]
-
-    @property
-    def _input_mask(self):
-        """ :class:`numpy.ndarray`: A dummy mask for inputting to the model. """
-        mask = np.zeros((1, ) + self._model.state.mask_shapes[0], dtype="float32")
-        return mask
-
-    @staticmethod
-    def _get_batchsize(queue_size):
-        """ Get the batch size for feeding the model.
-
-        Sets the batch size to 1 if inference is being run on CPU, otherwise the minimum of the
-        :attr:`self._queue_size` and 16.
+    def _get_io_sizes(self):
+        """ Obtain the input size and output size of the model.
 
         Returns
         -------
-        int
-            The batch size that the model is to be fed at.
+        dict
+            input_size in pixels and output_size in pixels
         """
-        logger.debug("Getting batchsize")
-        is_cpu = GPUStats().device_count == 0
-        batchsize = 1 if is_cpu else 16
-        batchsize = min(queue_size, batchsize)
-        logger.debug("Batchsize: %s", batchsize)
-        logger.debug("Got batchsize: %s", batchsize)
-        return batchsize
-
-    @staticmethod
-    def _set_tf_allow_growth():
-        """ Enables the TensorFlow configuration option "allow_growth".
-
-        TODO Move this temporary fix somewhere more appropriate
-        """
-        # pylint: disable=no-member
-        logger.debug("Setting Tensorflow 'allow_growth' option")
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
-        config.gpu_options.visible_device_list = "0"
-        set_session(tf.Session(config=config))
-        logger.debug("Set Tensorflow 'allow_growth' option")
+        input_shape = self._model.model.input_shape
+        input_shape = [input_shape] if not isinstance(input_shape, list) else input_shape
+        output_shape = self._model.model.output_shape
+        output_shape = [output_shape] if not isinstance(output_shape, list) else output_shape
+        retval = dict(input=input_shape[0][1], output=output_shape[-1][1])
+        logger.debug(retval)
+        return retval
 
     def _load_model(self):
         """ Load the Faceswap model.
@@ -764,10 +730,34 @@ class Predict():
         if not model_dir:
             raise FaceswapError("{} does not exist.".format(self._args.model_dir))
         trainer = self._get_model_name(model_dir)
-        gpus = 1 if not hasattr(self._args, "gpus") else self._args.gpus
-        model = PluginLoader.get_model(trainer)(model_dir, gpus, predict=True)
+        model = PluginLoader.get_model(trainer)(model_dir, self._args, predict=True)
+        model.build()
         logger.debug("Loaded Model")
         return model
+
+    def _get_batchsize(self, queue_size):
+        """ Get the batch size for feeding the model.
+
+        Sets the batch size to 1 if inference is being run on CPU, otherwise the minimum of the
+        input queue size and the model's `convert_batchsize` configuration option.
+
+        Parameters
+        ----------
+        queue_size: int
+            The queue size that is feeding the predictor
+
+        Returns
+        -------
+        int
+            The batch size that the model is to be fed at.
+        """
+        logger.debug("Getting batchsize")
+        is_cpu = GPUStats().device_count == 0
+        batchsize = 1 if is_cpu else self._model.config["convert_batchsize"]
+        batchsize = min(queue_size, batchsize)
+        logger.debug("Batchsize: %s", batchsize)
+        logger.debug("Got batchsize: %s", batchsize)
+        return batchsize
 
     def _get_model_name(self, model_dir):
         """ Return the name of the Faceswap model used.
@@ -901,15 +891,15 @@ class Predict():
         logger.trace("Loading aligned faces: '%s'", item["filename"])
         for detected_face in item["detected_faces"]:
             detected_face.load_feed_face(item["image"],
-                                         size=self._input_size,
-                                         coverage_ratio=self.coverage_ratio,
+                                         size=self._sizes["input"],
+                                         coverage_ratio=self._coverage_ratio,
                                          dtype="float32")
-            if self._input_size == self.output_size:
+            if self._sizes["input"] == self._sizes["output"]:
                 detected_face.reference = detected_face.feed
             else:
                 detected_face.load_reference_face(item["image"],
-                                                  size=self.output_size,
-                                                  coverage_ratio=self.coverage_ratio,
+                                                  size=self._sizes["output"],
+                                                  coverage_ratio=self._coverage_ratio,
                                                   dtype="float32")
         logger.trace("Loaded aligned faces: '%s'", item["filename"])
 
@@ -951,46 +941,19 @@ class Predict():
         """
         logger.trace("Predicting: Batchsize: %s", len(feed_faces))
         feed = [feed_faces]
-        if self._model.feed_mask:
-            feed.append(np.repeat(self._input_mask, feed_faces.shape[0], axis=0))
         logger.trace("Input shape(s): %s", [item.shape for item in feed])
 
-        predicted = self._predictor(feed, batch_size=batch_size)
+        predicted = self._model.model.predict(feed, batch_size=batch_size)
         predicted = predicted if isinstance(predicted, list) else [predicted]
         logger.trace("Output shape(s): %s", [predict.shape for predict in predicted])
 
-        predicted = self._filter_multi_out(predicted)
-
-        # Compile masks into alpha channel or keep raw faces
-        predicted = np.concatenate(predicted, axis=-1) if len(predicted) == 2 else predicted[0]
-        predicted = predicted.astype("float32")
+        # Only take last output(s)
+        if predicted[-1].shape[-1] == 1:  # Merge mask to alpha channel
+            predicted = np.concatenate(predicted[-2:], axis=-1).astype("float32")
+        else:
+            predicted = predicted[-1].astype("float32")
 
         logger.trace("Final shape: %s", predicted.shape)
-        return predicted
-
-    def _filter_multi_out(self, predicted):
-        """ Filter the model output to just the required image.
-
-        Some models have multi-scale outputs, so just make sure we take the largest
-        output.
-
-        Parameters
-        ----------
-        predicted: :class:`numpy.ndarray`
-            The predictions retrieved from the Faceswap model.
-
-        Returns
-        -------
-        :class:`numpy.ndarray`
-            The predictions with any superfluous outputs removed.
-        """
-        if not predicted:
-            return predicted
-        face = predicted[self._output_indices["face"]]
-        mask_idx = self._output_indices["mask"]
-        mask = predicted[mask_idx] if mask_idx is not None else None
-        predicted = [face, mask] if mask is not None else [face]
-        logger.trace("Filtered output shape(s): %s", [predict.shape for predict in predicted])
         return predicted
 
     def _queue_out_frames(self, batch, swapped_faces):

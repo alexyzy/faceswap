@@ -6,9 +6,9 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from lib.gui import (TaskBar, CliOptions, CommandNotebook, ConsoleOut, Session, DisplayNotebook,
+from lib.gui import (TaskBar, CliOptions, CommandNotebook, ConsoleOut, DisplayNotebook,
                      get_images, initialize_images, initialize_config, LastSession,
-                     MainMenuBar, ProcessWrapper, StatusBar)
+                     MainMenuBar, preview_trigger, ProcessWrapper, StatusBar)
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -30,6 +30,7 @@ class FaceswapGui(tk.Tk):
         self.objects = dict()
 
         get_images().delete_preview()
+        preview_trigger().clear()
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.build_gui()
         self._last_session = LastSession(self._config)
@@ -39,8 +40,7 @@ class FaceswapGui(tk.Tk):
         """ Initialize config and images global constants """
         cliopts = CliOptions()
         statusbar = StatusBar(self)
-        session = Session()
-        config = initialize_config(self, cliopts, statusbar, session)
+        config = initialize_config(self, cliopts, statusbar)
         initialize_images()
         return config
 
@@ -51,11 +51,18 @@ class FaceswapGui(tk.Tk):
             tk.font.nametofont(font).configure(family=self._config.default_font[0],
                                                size=self._config.default_font[1])
 
-    @staticmethod
-    def set_styles():
+    def set_styles(self):
         """ Set global custom styles """
         gui_style = ttk.Style()
         gui_style.configure('TLabelframe.Label', foreground="#0046D5", relief=tk.SOLID)
+        gui_style.configure('H1.TLabel',
+                            font=(self._config.default_font[0],
+                                  self._config.default_font[1] + 4,
+                                  "bold"))
+        gui_style.configure('H2.TLabel',
+                            font=(self._config.default_font[0],
+                                  self._config.default_font[1] + 2,
+                                  "bold"))
 
     def build_gui(self, rebuild=False):
         """ Build the GUI """
@@ -162,6 +169,7 @@ class FaceswapGui(tk.Tk):
 
         self._last_session.save()
         get_images().delete_preview()
+        preview_trigger().clear()
         self.quit()
         logger.debug("Closed GUI")
         sys.exit(0)

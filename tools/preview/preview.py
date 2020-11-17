@@ -87,7 +87,7 @@ class Preview(tk.Tk):  # pylint:disable=too-few-public-methods
     def _initialize_tkinter(self):
         """ Initialize a standalone tkinter instance. """
         logger.debug("Initializing tkinter")
-        initialize_config(self, None, None, None)
+        initialize_config(self, None, None)
         initialize_images()
         get_config().set_geometry(940, 600, fullscreen=False)
         self.title("Faceswap.py - Convert Settings")
@@ -141,7 +141,6 @@ class Preview(tk.Tk):  # pylint:disable=too-few-public-methods
             self._samples.predictor.has_predicted_mask,
             self._patch.converter.cli_arguments.color_adjustment.replace("-", "_"),
             self._patch.converter.cli_arguments.mask_type.replace("-", "_"),
-            self._patch.converter.cli_arguments.scaling.replace("-", "_"),
             self._config_tools,
             self._refresh,
             self._samples.generate,
@@ -412,6 +411,7 @@ class Patch():
                                    thread_count=1,
                                    name="patch_thread")
         self._thread.start()
+        logger.debug("Initializing %s", self.__class__.__name__)
 
     @property
     def trigger(self):
@@ -479,6 +479,9 @@ class Patch():
         tk_vars: dict
             Global tkinter variables. `Refresh` and `Busy` :class:`tkinter.BooleanVar`
         """
+        logger.debug("Launching patch process thread: (trigger_event: %s, shutdown_event: %s, "
+                     "patch_queue_in: %s, samples: %s, tk_vars: %s)", trigger_event,
+                     shutdown_event, patch_queue_in, samples, tk_vars)
         patch_queue_out = queue_manager.get_queue("preview_patch_out")
         while True:
             trigger = trigger_event.wait(1)
@@ -489,7 +492,6 @@ class Patch():
                 continue
             # Clear trigger so calling process can set it during this run
             trigger_event.clear()
-            tk_vars["busy"].set(True)
             queue_manager.flush_queue("preview_patch_in")
             self._feed_swapped_faces(patch_queue_in, samples)
             with self._lock:
@@ -500,6 +502,7 @@ class Patch():
                 self._display.destination = swapped
             tk_vars["refresh"].set(True)
             tk_vars["busy"].set(False)
+        logger.debug("Closed patch process thread")
 
     def _update_converter_arguments(self):
         """ Update the converter arguments to the currently selected values. """
@@ -1006,8 +1009,6 @@ class ActionFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
         The selected color adjustment type
     selected_mask_type: str
         The selected mask type
-    selected_scaling: str
-        The selected scaling type
     config_tools: :class:`ConfigTools`
         Tools for loading and saving configuration files
     patch_callback: python function
@@ -1018,19 +1019,17 @@ class ActionFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
         Global tkinter variables. `Refresh` and `Busy` :class:`tkinter.BooleanVar`
     """
     def __init__(self, parent, available_masks, has_predicted_mask, selected_color,
-                 selected_mask_type, selected_scaling, config_tools, patch_callback,
-                 refresh_callback, tk_vars):
+                 selected_mask_type, config_tools, patch_callback, refresh_callback, tk_vars):
         logger.debug("Initializing %s: (available_masks: %s, has_predicted_mask: %s, "
-                     "selected_color: %s, selected_mask_type: %s, selected_scaling: %s, "
-                     "patch_callback: %s, refresh_callback: %s, tk_vars: %s)",
+                     "selected_color: %s, selected_mask_type: %s, patch_callback: %s, "
+                     "refresh_callback: %s, tk_vars: %s)",
                      self.__class__.__name__, available_masks, has_predicted_mask, selected_color,
-                     selected_mask_type, selected_scaling, patch_callback, refresh_callback,
-                     tk_vars)
+                     selected_mask_type, patch_callback, refresh_callback, tk_vars)
         self._config_tools = config_tools
 
         super().__init__(parent)
         self.pack(side=tk.LEFT, anchor=tk.N, fill=tk.Y)
-        self._options = ["color", "mask_type", "scaling"]
+        self._options = ["color", "mask_type"]
         self._busy_tkvar = tk_vars["busy"]
         self._tk_vars = dict()
 
