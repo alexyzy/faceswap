@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """ Tool to preview swaps and tweak configuration prior to running a convert """
 
+import gettext
 import logging
 import random
 import tkinter as tk
@@ -15,13 +16,12 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from lib.aligner import Extract as AlignerExtract
+from lib.align import DetectedFace, transform_image
 from lib.cli.args import ConvertArgs
 from lib.gui.utils import get_images, get_config, initialize_config, initialize_images
 from lib.gui.custom_widgets import Tooltip
 from lib.gui.control_helper import ControlPanel, ControlPanelOption
 from lib.convert import Converter
-from lib.faces_detect import DetectedFace
 from lib.multithreading import MultiThread
 from lib.utils import FaceswapError
 from lib.queue_manager import queue_manager
@@ -32,6 +32,10 @@ from plugins.plugin_loader import PluginLoader
 from plugins.convert._config import Config
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+# LOCALES
+_LANG = gettext.translation("tools.preview", localedir="locales", fallback=True)
+_ = _LANG.gettext
 
 
 class Preview(tk.Tk):  # pylint:disable=too-few-public-methods
@@ -124,15 +128,12 @@ class Preview(tk.Tk):  # pylint:disable=too-few-public-methods
 
     def _build_ui(self):
         """ Build the elements for displaying preview images and options panels. """
-        container = tk.PanedWindow(self,
-                                   sashrelief=tk.RIDGE,
-                                   sashwidth=4,
-                                   sashpad=8,
-                                   orient=tk.VERTICAL)
+        container = ttk.PanedWindow(self,
+                                    orient=tk.VERTICAL)
         container.pack(fill=tk.BOTH, expand=True)
         container.preview_display = self._display
         self._image_canvas = ImagesCanvas(container, self._tk_vars)
-        container.add(self._image_canvas, height=400 * get_config().scaling_factor)
+        container.add(self._image_canvas, weight=3)
 
         options_frame = ttk.Frame(container)
         self._cli_frame = ActionFrame(
@@ -148,7 +149,9 @@ class Preview(tk.Tk):  # pylint:disable=too-few-public-methods
         self._opts_book = OptionsBook(options_frame,
                                       self._config_tools,
                                       self._refresh)
-        container.add(options_frame)
+        container.add(options_frame, weight=1)
+        self.update_idletasks()
+        container.sashpos(0, int(400 * get_config().scaling_factor))
 
 
 class Samples():
@@ -190,6 +193,11 @@ class Samples():
         self._alignments = Alignments(arguments,
                                       is_extract=False,
                                       input_is_video=self._images.is_video)
+        if self._alignments.version == 1.0:
+            logger.error("The alignments file format has been updated since the given alignments "
+                         "file was generated. You need to update the file to proceed.")
+            logger.error("To do this run the 'Alignments Tool' > 'Extract' Job.")
+            sys.exit(1)
         if not self._alignments.have_alignments_file:
             logger.error("Alignments file not found at: '%s'", self._alignments.file)
             sys.exit(1)
@@ -199,6 +207,7 @@ class Samples():
         self._predictor = Predict(queue_manager.get_queue("preview_predict_in"),
                                   sample_size,
                                   arguments)
+        self._display.set_centering(self._predictor.centering)
         self.generate()
 
         logger.debug("Initialized %s", self.__class__.__name__)
@@ -215,7 +224,7 @@ class Samples():
 
     @property
     def alignments(self):
-        """ :class:`~lib.alignments.Alignments`: The alignments for the preview faces """
+        """ :class:`~lib.align.Alignments`: The alignments for the preview faces """
         return self._alignments
 
     @property
@@ -301,11 +310,11 @@ class Samples():
 
         * Picks a random face from each indices group.
 
-        * Takes the first face from the image (if there) are multiple faces. Adds the images to \
-            :attr:`self._input_images`.
+        * Takes the first face from the image (if there are multiple faces). Adds the images to \
+        :attr:`self._input_images`.
 
-        * Sets :attr:`_display.source` to the input images and flags that the display should \
-            be updated
+        * Sets :attr:`_display.source` to the input images and flags that the display should be \
+        updated
         """
         self._input_images = list()
         for selection in self._random_choice:
@@ -395,6 +404,7 @@ class Patch():
         configfile = arguments.configfile if hasattr(arguments, "configfile") else None
         self._converter = Converter(output_size=self._samples.predictor.output_size,
                                     coverage_ratio=self._samples.predictor.coverage_ratio,
+                                    centering=self._samples.predictor.centering,
                                     draw_transparent=False,
                                     pre_encode=None,
                                     arguments=self._generate_converter_arguments(arguments,
@@ -596,6 +606,7 @@ class FacesDisplay():
         self._padding = padding
 
         self._faces = dict()
+        self._centering = None
         self._faces_source = None
         self._faces_dest = None
         self._tk_image = None
@@ -618,6 +629,17 @@ class FacesDisplay():
     def _total_columns(self):
         """ Return the total number of images that are being displayed """
         return len(self.source)
+
+    def set_centering(self, centering):
+        """ The centering that the model uses is not known at initialization time.
+        Set :attr:`_centering` when the model has been loaded.
+
+        Parameters
+        ----------
+        centering: str
+            The centering that the model was trained on
+        """
+        self._centering = centering
 
     def set_display_dimensions(self, dimensions):
         """ Adjust the size of the frame that will hold the preview samples.
@@ -699,16 +721,15 @@ class FacesDisplay():
         for image in self.source:
             detected_face = image["detected_faces"][0]
             src_img = image["image"]
-            detected_face.load_aligned(src_img, self._size)
-            matrix = detected_face.aligned["matrix"]
+            detected_face.load_aligned(src_img, size=self._size, centering=self._centering)
+            matrix = detected_face.aligned.matrix
             self._faces.setdefault("filenames",
                                    list()).append(os.path.splitext(image["filename"])[0])
             self._faces.setdefault("matrix", list()).append(matrix)
-            self._faces.setdefault("src", list()).append(AlignerExtract().transform(
-                src_img,
-                matrix,
-                self._size,
-                self._padding))
+            self._faces.setdefault("src", list()).append(transform_image(src_img,
+                                                                         matrix,
+                                                                         self._size,
+                                                                         self._padding))
         self.update_source = False
         logger.debug("Updated source faces")
 
@@ -720,11 +741,10 @@ class FacesDisplay():
         destination = self.destination if self.destination else [np.ones_like(src["image"])
                                                                  for src in self.source]
         for idx, image in enumerate(destination):
-            self._faces["dst"].append(AlignerExtract().transform(
-                image,
-                self._faces["matrix"][idx],
-                self._size,
-                self._padding))
+            self._faces["dst"].append(transform_image(image,
+                                                      self._faces["matrix"][idx],
+                                                      self._size,
+                                                      self._padding))
         logger.debug("Updated destination faces")
 
     def _header_text(self):
@@ -1132,7 +1152,7 @@ class ActionFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
             Whether the model was trained with a mask
         """
         cp_options = self._get_control_panel_options(defaults, available_masks, has_predicted_mask)
-        panel_kwargs = dict(blank_nones=False, label_width=10)
+        panel_kwargs = dict(blank_nones=False, label_width=10, style="CPanel")
         ControlPanel(parent, cp_options, header_text=None, **panel_kwargs)
 
     def _get_control_panel_options(self, defaults, available_masks, has_predicted_mask):
@@ -1162,6 +1182,7 @@ class ActionFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
                                            default=defaults[opt],
                                            initial_value=defaults[opt],
                                            choices=choices,
+                                           group="Command Line Choices",
                                            is_radio=False)
             self._tk_vars[opt] = cp_option.tk_var
             cp_options.append(cp_option)
@@ -1281,20 +1302,20 @@ class ActionFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
             logger.debug("Adding button: '%s'", utl)
             img = get_images().icons[utl]
             if utl == "save":
-                text = "Save full config"
+                text = _("Save full config")
                 action = self._config_tools.save_config
             elif utl == "clear":
-                text = "Reset full config to default values"
+                text = _("Reset full config to default values")
                 action = self._config_tools.reset_config_to_default
             elif utl == "reload":
-                text = "Reset full config to saved values"
+                text = _("Reset full config to saved values")
                 action = self._config_tools.reset_config_to_saved
 
             btnutl = ttk.Button(frame,
                                 image=img,
                                 command=action)
             btnutl.pack(padx=2, side=tk.RIGHT)
-            Tooltip(btnutl, text=text, wraplength=200)
+            Tooltip(btnutl, text=text, wrap_length=200)
         logger.debug("Added util buttons")
 
 
@@ -1397,7 +1418,7 @@ class ConfigFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
             The section/plugin key for these configuration options
         """
         logger.debug("Add Config Frame")
-        panel_kwargs = dict(columns=2, option_columns=2, blank_nones=False)
+        panel_kwargs = dict(columns=2, option_columns=2, blank_nones=False, style="CPanel")
         frame = ttk.Frame(self)
         frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         cp_options = [opt for key, opt in self._options.items() if key != "helptext"]
@@ -1431,18 +1452,18 @@ class ConfigFrame(ttk.Frame):  # pylint: disable=too-many-ancestors
             logger.debug("Adding button: '%s'", utl)
             img = get_images().icons[utl]
             if utl == "save":
-                text = "Save {} config".format(title)
+                text = _("Save {} config").format(title)
                 action = parent.config_tools.save_config
             elif utl == "clear":
-                text = "Reset {} config to default values".format(title)
+                text = _("Reset {} config to default values").format(title)
                 action = parent.config_tools.reset_config_to_default
             elif utl == "reload":
-                text = "Reset {} config to saved values".format(title)
+                text = _("Reset {} config to saved values").format(title)
                 action = parent.config_tools.reset_config_to_saved
 
             btnutl = ttk.Button(btn_frame,
                                 image=img,
                                 command=lambda cmd=action: cmd(config_key))
             btnutl.pack(padx=2, side=tk.RIGHT)
-            Tooltip(btnutl, text=text, wraplength=200)
+            Tooltip(btnutl, text=text, wrap_length=200)
         logger.debug("Added util buttons")

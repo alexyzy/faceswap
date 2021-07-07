@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """ Mask Editor for the manual adjustments tool """
+import gettext
 import tkinter as tk
 
 import numpy as np
@@ -7,6 +8,10 @@ import cv2
 from PIL import Image, ImageTk
 
 from ._base import ControlPanelOption, Editor, logger
+
+# LOCALES
+_LANG = gettext.translation("tools.manual", localedir="locales", fallback=True)
+_ = _LANG.gettext
 
 
 class Mask(Editor):
@@ -25,11 +30,11 @@ class Mask(Editor):
         self._meta = []
         self._tk_faces = []
         self._internal_size = 512
-        control_text = ("Mask Editor\nEdit the mask."
-                        "\n - NB: For Landmark based masks (e.g. components/extended) it is "
-                        "better to make sure the landmarks are correct rather than editing the "
-                        "mask directly. Any change to the landmarks after editing the mask will "
-                        "override your manual edits.")
+        control_text = _("Mask Editor\nEdit the mask."
+                         "\n - NB: For Landmark based masks (e.g. components/extended) it is "
+                         "better to make sure the landmarks are correct rather than editing the "
+                         "mask directly. Any change to the landmarks after editing the mask will "
+                         "override your manual edits.")
         key_bindings = {"[": lambda *e, i=False: self._adjust_brush_radius(increase=i),
                         "]": lambda *e, i=True: self._adjust_brush_radius(increase=i)}
         super().__init__(canvas, detected_faces,
@@ -67,9 +72,10 @@ class Mask(Editor):
     def _add_actions(self):
         """ Add the optional action buttons to the viewer. Current actions are Draw, Erase
         and Zoom. """
-        self._add_action("magnify", "zoom", "Magnify/Demagnify the View", group=None, hotkey="M")
-        self._add_action("draw", "draw", "Draw Tool", group="paint", hotkey="D")
-        self._add_action("erase", "erase", "Erase Tool", group="paint", hotkey="E")
+        self._add_action("magnify", "zoom", _("Magnify/Demagnify the View"),
+                         group=None, hotkey="M")
+        self._add_action("draw", "draw", _("Draw Tool"), group="paint", hotkey="D")
+        self._add_action("erase", "erase", _("Erase Tool"), group="paint", hotkey="E")
         self._actions["magnify"]["tk_var"].trace("w", lambda *e: self._globals.tk_update.set(True))
 
     def _add_controls(self):
@@ -88,21 +94,21 @@ class Mask(Editor):
                                              choices=masks,
                                              default=default,
                                              is_radio=True,
-                                             helptext="Select which mask to edit"))
+                                             helptext=_("Select which mask to edit")))
         self._add_control(ControlPanelOption("Brush Size",
                                              int,
                                              group="Brush",
                                              min_max=(1, 100),
                                              default=10,
                                              rounding=1,
-                                             helptext="Set the brush size. ([ - decrease, "
-                                                      "] - increase)"))
+                                             helptext=_("Set the brush size. ([ - decrease, "
+                                                        "] - increase)")))
         self._add_control(ControlPanelOption("Cursor Color",
                                              str,
                                              group="Brush",
                                              choices="colorchooser",
                                              default="#ffffff",
-                                             helptext="Select the brush cursor color."))
+                                             helptext=_("Select the brush cursor color.")))
 
     def _set_tk_mask_change_callback(self):
         """ Add a trace to change the displayed mask on a mask type change. """
@@ -164,19 +170,21 @@ class Mask(Editor):
             return
 
         logger.debug("Defining meta information for face: %s", face_index)
-        scale = self._internal_size / mask.mask.shape[0]
+        scale = self._internal_size / mask.stored_size
         self._set_full_frame_meta(mask, scale)
         dims = (self._internal_size, self._internal_size)
-        self._meta.setdefault("mask", []).append(cv2.resize(mask.mask,
+        self._meta.setdefault("mask", []).append(cv2.resize(mask.stored_mask,
                                                             dims,
                                                             interpolation=cv2.INTER_CUBIC))
+        if self.zoomed_centering != mask.stored_centering:
+            self.zoomed_centering = mask.stored_centering
 
     def _set_full_frame_meta(self, mask, mask_scale):
         """ Sets the meta information for displaying the mask in full frame mode.
 
         Parameters
         ----------
-        mask: :class:`lib.faces_detect.Mask`
+        mask: :class:`lib.align.Mask`
             The mask object
         mask_scale: float
             The scaling factor from the stored mask size to the internal mask size
@@ -325,7 +333,8 @@ class Mask(Editor):
                               frame_dims,
                               frame,
                               flags=cv2.WARP_INVERSE_MAP | interpolator,
-                              borderMode=cv2.BORDER_CONSTANT)[slices[0], slices[1]][..., None]
+                              borderMode=cv2.BORDER_CONSTANT)[slices[0], slices[1]]
+        mask = mask[..., None] if mask.ndim == 2 else mask
         rgb = np.tile(rgb_color, mask.shape).astype("uint8")
         rgba = np.concatenate((rgb, np.minimum(mask, self._meta["roi_mask"][face_index])), axis=2)
         return Image.fromarray(rgba)
@@ -333,7 +342,7 @@ class Mask(Editor):
     def _update_roi_box(self, mask, face_index, color):
         """ Update the region of interest box for the current mask.
 
-        mask: :class:`~lib.faces_detect.Mask`
+        mask: :class:`~lib.align.Mask`
             The current mask object to create an ROI box for
         face_index: int
             The index of the face within the current frame

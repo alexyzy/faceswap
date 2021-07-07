@@ -64,11 +64,11 @@ be imported as :mod:`lib.model.losses` depending on the backend in use.
    :nosignatures:
 
    ~lib.model.losses_tf.DSSIMObjective
-   ~lib.model.losses_tf.PenalizedLoss
    ~lib.model.losses_tf.GeneralizedLoss
    ~lib.model.losses_tf.GMSDLoss
    ~lib.model.losses_tf.GradientLoss
    ~lib.model.losses_tf.LInfNorm
+   ~lib.model.losses_tf.LossWrapper
 
 .. automodule:: lib.model.losses_tf
    :members:
@@ -108,6 +108,25 @@ model.normalization module
    ~lib.model.normalization.InstanceNormalization
    
 .. automodule:: lib.model.normalization
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+model.optimizers module
+-----------------------
+
+The optimizers listed here are generated from the docstrings in :mod:`lib.model.optimizers_tf`, however
+the functions are excactly the same for :mod:`lib.model.optimizers_plaid`. The correct optimizers module will
+be imported as :mod:`lib.model.optimizers` depending on the backend in use.
+
+.. rubric:: Module Summary
+
+.. autosummary::
+   :nosignatures:
+
+   ~lib.model.optimizers_tf.AdaBelief
+
+.. automodule:: lib.model.optimizers_tf
    :members:
    :undoc-members:
    :show-inheritance:

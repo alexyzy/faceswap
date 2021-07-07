@@ -7,7 +7,7 @@ import sys
 
 from tqdm import tqdm
 
-from lib.image import encode_image_with_hash, generate_thumbnail, ImagesLoader, ImagesSaver
+from lib.image import encode_image, generate_thumbnail, ImagesLoader, ImagesSaver
 from lib.multithreading import MultiThread
 from lib.utils import get_folder
 from plugins.extract.pipeline import Extractor, ExtractMedia
@@ -62,7 +62,8 @@ class Extract():  # pylint:disable=too-few-public-methods
                                     exclude_gpus=self._args.exclude_gpus,
                                     rotate_images=self._args.rotate_images,
                                     min_size=self._args.min_size,
-                                    normalize_method=normalization)
+                                    normalize_method=normalization,
+                                    re_feed=self._args.re_feed)
         self._threads = list()
         self._verify_output = False
         logger.debug("Initialized %s", self.__class__.__name__)
@@ -250,8 +251,10 @@ class Extract():  # pylint:disable=too-few-public-methods
             The size that the aligned face should be created at
         """
         for face in extract_media.detected_faces:
-            face.load_aligned(extract_media.image, size=size)
-            face.thumbnail = generate_thumbnail(face.aligned_face, size=80, quality=60)
+            face.load_aligned(extract_media.image,
+                              size=size,
+                              centering="head")
+            face.thumbnail = generate_thumbnail(face.aligned.face, size=96, quality=60)
         self._post_process.do_actions(extract_media)
         extract_media.remove_image()
 
@@ -279,10 +282,18 @@ class Extract():  # pylint:disable=too-few-public-methods
         """
         logger.trace("Outputting faces for %s", extract_media.filename)
         final_faces = list()
-        filename, extension = os.path.splitext(os.path.basename(extract_media.filename))
+        filename = os.path.splitext(os.path.basename(extract_media.filename))[0]
+        extension = ".png"
+
         for idx, face in enumerate(extract_media.detected_faces):
             output_filename = "{}_{}{}".format(filename, str(idx), extension)
-            face.hash, image = encode_image_with_hash(face.aligned_face, extension)
+            meta = dict(alignments=face.to_png_meta(),
+                        source=dict(alignments_version=self._alignments.version,
+                                    original_filename=output_filename,
+                                    face_index=idx,
+                                    source_filename=os.path.basename(extract_media.filename),
+                                    source_is_video=self._images.is_video))
+            image = encode_image(face.aligned.face, extension, metadata=meta)
 
             if not self._args.skip_saving_faces:
                 saver.save(output_filename, image)
