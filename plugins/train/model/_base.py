@@ -199,6 +199,12 @@ class ModelBase():
         return os.path.splitext(basename)[0].lower()
 
     @property
+    def model_name(self):
+        """ str: The name of the keras model. Generally this will be the same as :attr:`name`
+        but some plugins will override this when they contain multiple architectures """
+        return self.name
+
+    @property
     def output_shapes(self):
         """ list: A list of list of shape tuples for the outputs of the model with the batch
         dimension removed. The outer list contains 2 sub-lists (one for each side "a" and "b").
@@ -898,7 +904,7 @@ class _Weights():
     def __init__(self, plugin):
         logger.debug("Initializing %s: (plugin: %s)", self.__class__.__name__, plugin)
         self._model = plugin.model
-        self._name = plugin.name
+        self._name = plugin.model_name
         self._do_freeze = plugin._args.freeze_weights
         self._weights_file = self._check_weights_file(plugin._args.load_weights)
 
@@ -928,13 +934,14 @@ class _Weights():
 
         msg = ""
         if not os.path.exists(weights_file):
-            msg = "Load weights selected, but the path '%s' does not exist."
+            msg = f"Load weights selected, but the path '{weights_file}' does not exist."
         elif not os.path.splitext(weights_file)[-1].lower() == ".h5":
-            msg = "Load weights selected, but the path '%s' is not a valid Keras model (.h5) file."
+            msg = (f"Load weights selected, but the path '{weights_file}' is not a valid Keras "
+                   f"model (.h5) file.")
 
         if msg:
             msg += " Please check and try again."
-            logger.error(msg)
+            raise FaceswapError(msg)
 
         logger.verbose("Using weights file: %s", weights_file)
         return weights_file
@@ -1266,14 +1273,15 @@ class _Loss():
                 loss_func.add_loss(face_loss, mask_channel=mask_channels[0])
                 self._add_l2_regularization_term(loss_func, mask_channels[0])
 
-                mask_channel = 1
+                channel_idx = 1
                 for multiplier in ("eye_multiplier", "mouth_multiplier"):
+                    mask_channel = mask_channels[channel_idx]
                     if self._config[multiplier] > 1:
                         loss_func.add_loss(face_loss,
                                            weight=self._config[multiplier] * 1.0,
-                                           mask_channel=mask_channels[mask_channel])
+                                           mask_channel=mask_channel)
                         self._add_l2_regularization_term(loss_func, mask_channel)
-                    mask_channel += 1
+                    channel_idx += 1
 
             logger.debug("%s: (output_name: '%s', function: %s)", name, output_name, loss_func)
             self._funcs[output_name] = loss_func
