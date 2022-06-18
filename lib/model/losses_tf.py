@@ -4,20 +4,28 @@
 from __future__ import absolute_import
 
 import logging
+from typing import Callable, List, Tuple
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.keras.engine import compile_utils
 
-from keras import backend as K
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.python.keras.engine import compile_utils  # noqa pylint:disable=no-name-in-module,import-error
+from tensorflow.keras import backend as K  # pylint:disable=import-error
 
-logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
-class DSSIMObjective(tf.keras.losses.Loss):
-    """ DSSIM Loss Function
+class DSSIMObjective():  # pylint:disable=too-few-public-methods
+    """ DSSIM and MS-DSSIM Loss Functions
 
-    Difference of Structural Similarity (DSSIM loss function). Clipped between 0 and 0.5
+    Difference of Structural Similarity (DSSIM loss function).
+
+    Adapted from :func:`tensorflow.image.ssim` for a pure keras implentation.
+
+    Notes
+    -----
+    Channels last only. Assumes all input images are the same size and square
 
     Parameters
     ----------
@@ -25,179 +33,223 @@ class DSSIMObjective(tf.keras.losses.Loss):
         Parameter of the SSIM. Default: `0.01`
     k_2: float, optional
         Parameter of the SSIM. Default: `0.03`
-    kernel_size: int, optional
-        Size of the sliding window Default: `3`
+    filter_size: int, optional
+        size of gaussian filter Default: `11`
+    filter_sigma: float, optional
+        Width of gaussian filter Default: `1.5`
     max_value: float, optional
         Max value of the output. Default: `1.0`
 
     Notes
     ------
     You should add a regularization term like a l2 loss in addition to this one.
-
-    References
-    ----------
-    https://github.com/keras-team/keras-contrib/blob/master/keras_contrib/losses/dssim.py
-
-    MIT License
-
-    Copyright (c) 2017 Fariz Rahman
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
     """
-    def __init__(self, k_1=0.01, k_2=0.03, kernel_size=3, max_value=1.0):
-        super().__init__(name="DSSIMObjective")
-        self.kernel_size = kernel_size
-        self.k_1 = k_1
-        self.k_2 = k_2
-        self.max_value = max_value
-        self.c_1 = (self.k_1 * self.max_value) ** 2
-        self.c_2 = (self.k_2 * self.max_value) ** 2
-        self.dim_ordering = K.image_data_format()
+    def __init__(self,
+                 k_1: float = 0.01,
+                 k_2: float = 0.03,
+                 filter_size: int = 11,
+                 filter_sigma: float = 1.5,
+                 max_value: float = 1.0) -> None:
+        self._filter_size = filter_size
+        self._filter_sigma = filter_sigma
+        self._kernel = self._get_kernel()
 
-    @staticmethod
-    def _int_shape(input_tensor):
-        """ Returns the shape of tensor or variable as a tuple of int or None entries.
+        compensation = 1.0
+        self._c1 = (k_1 * max_value) ** 2
+        self._c2 = ((k_2 * max_value) ** 2) * compensation
 
-        Parameters
-        ----------
-        input_tensor: tensor or variable
-            The input to return the shape for
+    def _get_kernel(self) -> tf.Tensor:
+        """ Obtain the base kernel for performing depthwise convolution.
 
         Returns
         -------
-        tuple
-            A tuple of integers (or None entries)
+        :class:`tf.Tensor`
+            The gaussian kernel based on selected size and sigma
         """
-        return K.int_shape(input_tensor)
+        coords = np.arange(self._filter_size, dtype="float32")
+        coords -= (self._filter_size - 1) / 2.
 
-    def call(self, y_true, y_pred):
-        """ Call the DSSIM Loss Function.
+        kernel = np.square(coords)
+        kernel *= -0.5 / np.square(self._filter_sigma)
+        kernel = np.reshape(kernel, (1, -1)) + np.reshape(kernel, (-1, 1))
+        kernel = K.constant(np.reshape(kernel, (1, -1)))
+        kernel = K.softmax(kernel)
+        kernel = K.reshape(kernel, (self._filter_size, self._filter_size, 1, 1))
+        return kernel
+
+    @classmethod
+    def _depthwise_conv2d(cls, image: tf.Tensor, kernel: tf.Tensor) -> tf.Tensor:
+        """ Perform a standardized depthwise convolution.
 
         Parameters
         ----------
-        y_true: tensor or variable
+        image: :class:`tf.Tensor`
+            Batch of images, channels last, to perform depthwise convolution
+        kernel: :class:`tf.Tensor`
+            convolution kernel
+
+        Returns
+        -------
+        :class:`tf.Tensor`
+            The output from the convolution
+        """
+        return K.depthwise_conv2d(image, kernel, strides=(1, 1), padding="valid")
+
+    def _get_ssim(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+        """ Obtain the structural similarity between a batch of true and predicted images.
+
+        Parameters
+        ----------
+        y_true: :class:`tf.Tensor`
+            The input batch of ground truth images
+        y_pred: :class:`tf.Tensor`
+            The input batch of predicted images
+
+        Returns
+        -------
+        :class:`tf.Tensor`
+            The SSIM for the given images
+        :class:`tf.Tensor`
+            The Contrast for the given images
+        """
+        channels = K.int_shape(y_true)[-1]
+        kernel = K.tile(self._kernel, (1, 1, channels, 1))
+
+        # SSIM luminance measure is (2 * mu_x * mu_y + c1) / (mu_x ** 2 + mu_y ** 2 + c1)
+        mean_true = self._depthwise_conv2d(y_true, kernel)
+        mean_pred = self._depthwise_conv2d(y_pred, kernel)
+        num_lum = mean_true * mean_pred * 2.0
+        den_lum = K.square(mean_true) + K.square(mean_pred)
+        luminance = (num_lum + self._c1) / (den_lum + self._c1)
+
+        # SSIM contrast-structure measure is (2 * cov_{xy} + c2) / (cov_{xx} + cov_{yy} + c2)
+        num_con = self._depthwise_conv2d(y_true * y_pred, kernel) * 2.0
+        den_con = self._depthwise_conv2d(K.square(y_true) + K.square(y_pred), kernel)
+
+        contrast = (num_con - num_lum + self._c2) / (den_con - den_lum + self._c2)
+
+        # Average over the height x width dimensions
+        axes = (-3, -2)
+        ssim = K.mean(luminance * contrast, axis=axes)
+        contrast = K.mean(contrast, axis=axes)
+
+        return ssim, contrast
+
+    def __call__(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        """ Call the DSSIM  or MS-DSSIM Loss Function.
+
+        Parameters
+        ----------
+        y_true: :class:`tf.Tensor`
+            The input batch of ground truth images
+        y_pred: :class:`tf.Tensor`
+            The input batch of predicted images
+
+        Returns
+        -------
+        :class:`tf.Tensor`
+            The DSSIM or MS-DSSIM for the given images
+        """
+        ssim = self._get_ssim(y_true, y_pred)[0]
+        retval = (1. - ssim) / 2.0
+        return K.mean(retval)
+
+
+class MSSIMLoss():  # pylint:disable=too-few-public-methods
+    """ Multiscale Structural Similarity Loss Function
+
+    Parameters
+    ----------
+    k_1: float, optional
+        Parameter of the SSIM. Default: `0.01`
+    k_2: float, optional
+        Parameter of the SSIM. Default: `0.03`
+    filter_size: int, optional
+        size of gaussian filter Default: `11`
+    filter_sigma: float, optional
+        Width of gaussian filter Default: `1.5`
+    max_value: float, optional
+        Max value of the output. Default: `1.0`
+    power_factors: tuple, optional
+        Iterable of weights for each of the scales. The number of scales used is the length of the
+        list. Index 0 is the unscaled resolution's weight and each increasing scale corresponds to
+        the image being downsampled by 2. Defaults to the values obtained in the original paper.
+        Default: (0.0448, 0.2856, 0.3001, 0.2363, 0.1333)
+
+    Notes
+    ------
+    You should add a regularization term like a l2 loss in addition to this one.
+    """
+    def __init__(self,
+                 k_1: float = 0.01,
+                 k_2: float = 0.03,
+                 filter_size: int = 11,
+                 filter_sigma: float = 1.5,
+                 max_value: float = 1.0,
+                 power_factors: Tuple[float, ...] = (0.0448, 0.2856, 0.3001, 0.2363, 0.1333)
+                 ) -> None:
+        self.filter_size = filter_size
+        self.filter_sigma = filter_sigma
+        self.k_1 = k_1
+        self.k_2 = k_2
+        self.max_value = max_value
+        self.power_factors = power_factors
+
+    def __call__(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        """ Call the MS-SSIM Loss Function.
+
+        Parameters
+        ----------
+        y_true: :class:`tf.Tensor`
             The ground truth value
-        y_pred: tensor or variable
+        y_pred: :class:`tf.Tensor`
             The predicted value
 
         Returns
         -------
-        tensor
-            The DSSIM Loss value
-
-        Notes
-        -----
-        There are additional parameters for this function. some of the 'modes' for edge behavior
-        do not yet have a gradient definition in the Theano tree and cannot be used for learning
+        :class:`tf.Tensor`
+            The MS-SSIM Loss value
         """
+        im_size = K.int_shape(y_true)[1]
+        # filter size cannot be larger than the smallest scale
+        smallest_scale = self._get_smallest_size(im_size, len(self.power_factors) - 1)
+        filter_size = min(self.filter_size, smallest_scale)
 
-        kernel = [self.kernel_size, self.kernel_size]
-        y_true = K.reshape(y_true, [-1] + list(self._int_shape(y_pred)[1:]))
-        y_pred = K.reshape(y_pred, [-1] + list(self._int_shape(y_pred)[1:]))
-        patches_pred = self.extract_image_patches(y_pred,
-                                                  kernel,
-                                                  kernel,
-                                                  'valid',
-                                                  self.dim_ordering)
-        patches_true = self.extract_image_patches(y_true,
-                                                  kernel,
-                                                  kernel,
-                                                  'valid',
-                                                  self.dim_ordering)
+        ms_ssim = tf.image.ssim_multiscale(y_true,
+                                           y_pred,
+                                           self.max_value,
+                                           power_factors=self.power_factors,
+                                           filter_size=filter_size,
+                                           filter_sigma=self.filter_sigma,
+                                           k1=self.k_1,
+                                           k2=self.k_2)
+        ms_ssim_loss = 1. - ms_ssim
+        return K.mean(ms_ssim_loss)
 
-        # Get mean
-        u_true = K.mean(patches_true, axis=-1)
-        u_pred = K.mean(patches_pred, axis=-1)
-        # Get variance
-        var_true = K.var(patches_true, axis=-1)
-        var_pred = K.var(patches_pred, axis=-1)
-        # Get standard deviation
-        covar_true_pred = K.mean(
-            patches_true * patches_pred, axis=-1) - u_true * u_pred
-
-        ssim = (2 * u_true * u_pred + self.c_1) * (
-            2 * covar_true_pred + self.c_2)
-        denom = (K.square(u_true) + K.square(u_pred) + self.c_1) * (
-            var_pred + var_true + self.c_2)
-        ssim /= denom  # no need for clipping, c_1 + c_2 make the denorm non-zero
-        return (1.0 - ssim) / 2.0
-
-    @staticmethod
-    def _preprocess_padding(padding):
-        """Convert keras padding to tensorflow padding.
+    def _get_smallest_size(self, size: int, idx: int) -> int:
+        """ Recursive function to obtain the smallest size that the image will be scaled to.
 
         Parameters
         ----------
-        padding: string,
-            `"same"` or `"valid"`.
+        size: int
+            The current scaled size to iterate through
+        idx: int
+            The current iteration to be performed. When iteration hits zero the value will
+            be returned
 
         Returns
         -------
-        str
-            `"SAME"` or `"VALID"`.
-
-        Raises
-        ------
-        ValueError
-            If `padding` is invalid.
+        int
+            The smallest size the image will be scaled to based on the original image size and
+            the amount of scaling factors that will occur
         """
-        if padding == 'same':
-            padding = 'SAME'
-        elif padding == 'valid':
-            padding = 'VALID'
-        else:
-            raise ValueError('Invalid padding:', padding)
-        return padding
-
-    def extract_image_patches(self, input_tensor, k_sizes, s_sizes,
-                              padding='same', data_format='channels_last'):
-        """ Extract the patches from an image.
-
-        Parameters
-        ----------
-        input_tensor: tensor
-            The input image
-        k_sizes: tuple
-            2-d tuple with the kernel size
-        s_sizes: tuple
-            2-d tuple with the strides size
-        padding: str, optional
-            `"same"` or `"valid"`. Default: `"same"`
-        data_format: str, optional.
-            `"channels_last"` or `"channels_first"`. Default: `"channels_last"`
-
-        Returns
-        -------
-        The (k_w, k_h) patches extracted
-            Tensorflow ==> (batch_size, w, h, k_w, k_h, c)
-            Theano ==> (batch_size, w, h, c, k_w, k_h)
-        """
-        kernel = [1, k_sizes[0], k_sizes[1], 1]
-        strides = [1, s_sizes[0], s_sizes[1], 1]
-        padding = self._preprocess_padding(padding)
-        if data_format == 'channels_first':
-            input_tensor = K.permute_dimensions(input_tensor, (0, 2, 3, 1))
-        patches = tf.image.extract_patches(input_tensor, kernel, strides, [1, 1, 1, 1], padding)
-        return patches
+        logger.debug("scale id: %s, size: %s", idx, size)
+        if idx > 0:
+            size = self._get_smallest_size(size // 2, idx - 1)
+        return size
 
 
-class GeneralizedLoss(tf.keras.losses.Loss):
+class GeneralizedLoss(tf.keras.losses.Loss):  # pylint:disable=too-few-public-methods
     """  Generalized function used to return a large variety of mathematical loss functions.
 
     The primary benefit is a smooth, differentiable version of L1 loss.
@@ -247,10 +299,13 @@ class GeneralizedLoss(tf.keras.losses.Loss):
         return loss
 
 
-class LInfNorm(tf.keras.losses.Loss):
+class LInfNorm(tf.keras.losses.Loss):  # pylint:disable=too-few-public-methods
     """ Calculate the L-inf norm as a loss function. """
+    def __init__(self):
+        super().__init__(name="l_inf_norm_loss")
 
-    def call(self, y_true, y_pred):
+    @classmethod
+    def call(cls, y_true, y_pred):
         """ Call the L-inf norm loss function.
 
         Parameters
@@ -271,7 +326,7 @@ class LInfNorm(tf.keras.losses.Loss):
         return loss
 
 
-class GradientLoss(tf.keras.losses.Loss):
+class GradientLoss(tf.keras.losses.Loss):  # pylint:disable=too-few-public-methods
     """ Gradient Loss Function.
 
     Calculates the first and second order gradient difference between pixels of an image in the x
@@ -392,7 +447,7 @@ class GradientLoss(tf.keras.losses.Loss):
         return (xy_out1 - xy_out2) * 0.25
 
 
-class GMSDLoss(tf.keras.losses.Loss):
+class GMSDLoss(tf.keras.losses.Loss):  # pylint:disable=too-few-public-methods
     """ Gradient Magnitude Similarity Deviation Loss.
 
     Improved image quality metric over MS-SSIM with easier calculations
@@ -402,6 +457,8 @@ class GMSDLoss(tf.keras.losses.Loss):
     http://www4.comp.polyu.edu.hk/~cslzhang/IQA/GMSD/GMSD.htm
     https://arxiv.org/ftp/arxiv/papers/1308/1308.3052.pdf
     """
+    def __init__(self):
+        super().__init__(name="gmsd_loss", reduction=tf.keras.losses.Reduction.NONE)
 
     def call(self, y_true, y_pred):
         """ Return the Gradient Magnitude Similarity Deviation Loss.
@@ -486,7 +543,9 @@ class GMSDLoss(tf.keras.losses.Loss):
         # Use depth-wise convolution to calculate edge maps per channel.
         # Output tensor has shape [batch_size, h, w, d * num_kernels].
         pad_sizes = [[0, 0], [2, 2], [2, 2], [0, 0]]
-        padded = tf.pad(image, pad_sizes, mode='REFLECT')
+        padded = tf.pad(image,  # pylint:disable=unexpected-keyword-arg,no-value-for-parameter
+                        pad_sizes,
+                        mode='REFLECT')
         output = K.depthwise_conv2d(padded, kernels)
 
         if not magnitude:  # direction of edges
@@ -499,24 +558,172 @@ class GMSDLoss(tf.keras.losses.Loss):
         return output
 
 
-class LossWrapper(tf.keras.losses.Loss):
-    """ A wrapper class for multiple keras losses to enable multiple weighted loss functions on a
-    single output.
+class LaplacianPyramidLoss():  # pylint:disable=too-few-public-methods
+    """ Laplacian Pyramid Loss Function
+
+    Notes
+    -----
+    Channels last implementation on square images only.
+
+    Parameters
+    ----------
+    max_levels: int, Optional
+        The max number of laplacian pyramid levels to use. Default: `5`
+    gaussian_size: int, Optional
+        The size of the gaussian kernel. Default: `5`
+    gaussian_sigma: float, optional
+        The gaussian sigma. Default: 2.0
+
+    References
+    ----------
+    https://arxiv.org/abs/1707.05776
+    https://github.com/nathanaelbosch/generative-latent-optimization/blob/master/utils.py
     """
-    def __init__(self):
+    def __init__(self,
+                 max_levels: int = 5,
+                 gaussian_size: int = 5,
+                 gaussian_sigma: float = 1.0) -> None:
+        self._max_levels = max_levels
+        self._weights = K.constant([np.power(2., -2 * idx) for idx in range(max_levels + 1)])
+        self._gaussian_kernel = self._get_gaussian_kernel(gaussian_size, gaussian_sigma)
+
+    @classmethod
+    def _get_gaussian_kernel(cls, size: int, sigma: float) -> tf.Tensor:
+        """ Obtain the base gaussian kernel for the Laplacian Pyramid.
+
+        Parameters
+        ----------
+        size: int, Optional
+            The size of the gaussian kernel
+        sigma: float
+            The gaussian sigma
+
+        Returns
+        -------
+        tf.Tensor
+            The base single channel Gaussian kernel
+        """
+        assert size % 2 == 1, ("kernel size must be uneven")
+        x_1 = np.linspace(- (size // 2), size // 2, size, dtype="float32")
+        x_1 /= np.sqrt(2)*sigma
+        x_2 = x_1 ** 2
+        kernel = np.exp(- x_2[:, None] - x_2[None, :])
+        kernel /= kernel.sum()
+        kernel = np.reshape(kernel, (size, size, 1, 1))
+        return K.constant(kernel)
+
+    def _conv_gaussian(self, inputs: tf.Tensor) -> tf.Tensor:
+        """ Perform Gaussian convolution on a batch of images.
+
+        Parameters
+        ----------
+        inputs: :class:`tf.Tensor`
+            The input batch of images to perform Gaussian convolution on.
+
+        Returns
+        -------
+        :class:`tf.Tensor`
+            The convolved images
+        """
+        channels = K.int_shape(inputs)[-1]
+        gauss = K.tile(self._gaussian_kernel, (1, 1, 1, channels))
+
+        # TF doesn't implement replication padding like pytorch. This is an inefficient way to
+        # implement it for a square guassian kernel
+        size = self._gaussian_kernel.shape[1] // 2
+        padded_inputs = inputs
+        for _ in range(size):
+            padded_inputs = tf.pad(padded_inputs,  # noqa,pylint:disable=no-value-for-parameter,unexpected-keyword-arg
+                                   ([0, 0], [1, 1], [1, 1], [0, 0]),
+                                   mode="SYMMETRIC")
+
+        retval = K.conv2d(padded_inputs, gauss, strides=1, padding="valid")
+        return retval
+
+    def _get_laplacian_pyramid(self, inputs: tf.Tensor) -> List[tf.Tensor]:
+        """ Obtain the Laplacian Pyramid.
+
+        Parameters
+        ----------
+        inputs: :class:`tf.Tensor`
+            The input batch of images to run through the Laplacian Pyramid
+
+        Returns
+        -------
+        list
+            The tensors produced from the Laplacian Pyramid
+        """
+        pyramid = []
+        current = inputs
+        for _ in range(self._max_levels):
+            gauss = self._conv_gaussian(current)
+            diff = current - gauss
+            pyramid.append(diff)
+            current = K.pool2d(gauss, (2, 2), strides=(2, 2), padding="valid", pool_mode="avg")
+        pyramid.append(current)
+        return pyramid
+
+    def __call__(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        """ Calculate the Laplacian Pyramid Loss.
+
+        Parameters
+        ----------
+        y_true: :class:`tf.Tensor`
+            The ground truth value
+        y_pred: :class:`tf.Tensor`
+            The predicted value
+
+        Returns
+        -------
+        :class: `tf.Tensor`
+            The loss value
+        """
+        pyramid_true = self._get_laplacian_pyramid(y_true)
+        pyramid_pred = self._get_laplacian_pyramid(y_pred)
+
+        losses = K.stack([K.sum(K.abs(ppred - ptrue)) / K.cast(K.prod(K.shape(ptrue)), "float32")
+                          for ptrue, ppred in zip(pyramid_true, pyramid_pred)])
+        loss = K.sum(losses * self._weights)
+
+        return loss
+
+
+class LossWrapper():
+    """ A wrapper class for multiple keras losses to enable multiple masked weighted loss
+    functions on a single output.
+
+    Notes
+    -----
+    Whilst Keras does allow for applying multiple weighted loss functions, it does not allow
+    for an easy mechanism to add additional data (in our case masks) that are batch specific
+    but are not fed in to the model.
+
+    This wrapper receives this additional mask data for the batch stacked onto the end of the
+    color channels of the received :attr:`y_true` batch of images. These masks are then split
+    off the batch of images and applied to both the :attr:`y_true` and :attr:`y_pred` tensors
+    prior to feeding into the loss functions.
+
+    For example, for an image of shape (4, 128, 128, 3) 3 additional masks may be stacked onto
+    the end of y_true, meaning we receive an input of shape (4, 128, 128, 6). This wrapper then
+    splits off (4, 128, 128, 3:6) from the end of the tensor, leaving the original y_true of
+    shape (4, 128, 128, 3) ready for masking and feeding through the loss functions.
+    """
+    def __init__(self) -> None:
         logger.debug("Initializing: %s", self.__class__.__name__)
-        super().__init__(name="LossWrapper")
-        self._loss_functions = []
-        self._loss_weights = []
-        self._mask_channels = []
+        self._loss_functions: List[compile_utils.LossesContainer] = []
+        self._loss_weights: List[float] = []
+        self._mask_channels: List[int] = []
         logger.debug("Initialized: %s", self.__class__.__name__)
 
-    def add_loss(self, function, weight=1.0, mask_channel=-1):
+    def add_loss(self,
+                 function: Callable,
+                 weight: float = 1.0,
+                 mask_channel: int = -1) -> None:
         """ Add the given loss function with the given weight to the loss function chain.
 
         Parameters
         ----------
-        function: :class:`keras.losses.Loss`
+        function: :class:`tf.keras.losses.Loss`
             The loss function to add to the loss chain
         weight: float, optional
             The weighting to apply to the loss function. Default: `1.0`
@@ -526,29 +733,31 @@ class LossWrapper(tf.keras.losses.Loss):
         """
         logger.debug("Adding loss: (function: %s, weight: %s, mask_channel: %s)",
                      function, weight, mask_channel)
+        # Loss must be compiled inside LossContainer for keras to handle distibuted strategies
         self._loss_functions.append(compile_utils.LossesContainer(function))
         self._loss_weights.append(weight)
         self._mask_channels.append(mask_channel)
 
-    def call(self, y_true, y_pred):
+    def __call__(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """ Call the sub loss functions for the loss wrapper.
 
-        Weights are returned as the weighted sum of the chosen losses.
+        Loss is returned as the weighted sum of the chosen losses.
 
-        If a mask is being applied to the loss, then the appropriate mask is extracted from y_true
-        and added as the 4th channel being passed to the penalized loss function.
+        If masks are being applied to the loss function inputs, then they should be included as
+        additional channels at the end of :attr:`y_true`, so that they can be split off and
+        applied to the actual inputs to the selected loss function(s).
 
         Parameters
         ----------
-        y_true: tensor or variable
-            The ground truth value
-        y_pred: tensor or variable
-            The predicted value
+        y_true: :class:`tensorflow.Tensor`
+            The ground truth batch of images, with any required masks stacked on the end
+        y_pred: :class:`tensorflow.Tensor`
+            The batch of model predictions
 
         Returns
         -------
-        tensor
-            The final loss value
+        :class:`tensorflow.Tensor`
+            The final weighted loss
         """
         loss = 0.0
         for func, weight, mask_channel in zip(self._loss_functions,
@@ -561,7 +770,11 @@ class LossWrapper(tf.keras.losses.Loss):
         return loss
 
     @classmethod
-    def _apply_mask(cls, y_true, y_pred, mask_channel, mask_prop=1.0):
+    def _apply_mask(cls,
+                    y_true: tf.Tensor,
+                    y_pred: tf.Tensor,
+                    mask_channel: int,
+                    mask_prop: float = 1.0) -> Tuple[tf.Tensor, tf.Tensor]:
         """ Apply the mask to the input y_true and y_pred. If a mask is not required then
         return the unmasked inputs.
 
@@ -578,19 +791,22 @@ class LossWrapper(tf.keras.losses.Loss):
 
         Returns
         -------
-        tuple
-            (n_true, n_pred): The ground truth and predicted value tensors with the mask applied
+        tf.Tensor
+            The ground truth batch of images, with the required mask applied
+        tf.Tensor
+            The predicted batch of images with the required mask applied
         """
         if mask_channel == -1:
             logger.debug("No mask to apply")
             return y_true[..., :3], y_pred[..., :3]
 
         logger.debug("Applying mask from channel %s", mask_channel)
-        mask = K.expand_dims(y_true[..., mask_channel], axis=-1)
+
+        mask = K.tile(K.expand_dims(y_true[..., mask_channel], axis=-1), (1, 1, 1, 3))
         mask_as_k_inv_prop = 1 - mask_prop
         mask = (mask * mask_prop) + mask_as_k_inv_prop
 
-        n_true = K.concatenate([y_true[:, :, :, i:i+1] * mask for i in range(3)], axis=-1)
-        n_pred = K.concatenate([y_pred[:, :, :, i:i+1] * mask for i in range(3)], axis=-1)
+        m_true = y_true[..., :3] * mask
+        m_pred = y_pred[..., :3] * mask
 
-        return n_true, n_pred
+        return m_true, m_pred

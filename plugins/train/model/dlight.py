@@ -7,15 +7,25 @@
     kvrooman for numerous insights and invaluable aid
     DeepHomage for lots of testing
     """
-
-from keras.layers import (AveragePooling2D, BatchNormalization, Concatenate, Dense, Dropout,
-                          Flatten, Input, Reshape, LeakyReLU, UpSampling2D)
+import logging
 
 from lib.model.nn_blocks import (Conv2DOutput, Conv2DBlock, ResidualBlock, UpscaleBlock,
                                  Upscale2xBlock)
-from lib.utils import FaceswapError
+from lib.utils import FaceswapError, get_backend
 
-from ._base import ModelBase, KerasModel, logger
+from ._base import ModelBase, KerasModel
+
+if get_backend() == "amd":
+    from keras.layers import (
+        AveragePooling2D, BatchNormalization, Concatenate, Dense, Dropout, Flatten, Input, Reshape,
+        LeakyReLU, UpSampling2D)
+else:
+    # Ignore linting errors from Tensorflow's thoroughly broken import system
+    from tensorflow.keras.layers import (  # pylint:disable=import-error,no-name-in-module
+        AveragePooling2D, BatchNormalization, Concatenate, Dense, Dropout, Flatten, Input, Reshape,
+        LeakyReLU, UpSampling2D)
+
+logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
 class Model(ModelBase):
@@ -218,6 +228,6 @@ class Model(ModelBase):
     def _legacy_mapping(self):
         """ The mapping of legacy separate model names to single model names """
         decoder_b = "decoder_b" if self.details > 0 else "decoder_b_fast"
-        return {"{}_encoder.h5".format(self.name): "encoder",
-                "{}_decoder_A.h5".format(self.name): "decoder_a",
-                "{}_decoder_B.h5".format(self.name): decoder_b}
+        return {f"{self.name}_encoder.h5": "encoder",
+                f"{self.name}_decoder_A.h5": "decoder_a",
+                f"{self.name}_decoder_B.h5": decoder_b}

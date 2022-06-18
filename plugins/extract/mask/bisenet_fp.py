@@ -6,23 +6,31 @@ https://github.com/zllrunning/face-parsing.PyTorch
 """
 import numpy as np
 
-from keras import backend as K
-from keras.layers import (Activation, Add, BatchNormalization, Concatenate, Conv2D,
-                          GlobalAveragePooling2D, Input, MaxPooling2D, Multiply, Reshape,
-                          UpSampling2D, ZeroPadding2D)
-
 from lib.model.session import KSession
+from lib.utils import get_backend
 from plugins.extract._base import _get_config
 from ._base import Masker, logger
+
+if get_backend() == "amd":
+    from keras import backend as K
+    from keras.layers import (
+        Activation, Add, BatchNormalization, Concatenate, Conv2D, GlobalAveragePooling2D, Input,
+        MaxPooling2D, Multiply, Reshape, UpSampling2D, ZeroPadding2D)
+else:
+    # Ignore linting errors from Tensorflow's thoroughly broken import system
+    from tensorflow.keras import backend as K  # pylint:disable=import-error
+    from tensorflow.keras.layers import (  # pylint:disable=no-name-in-module,import-error
+        Activation, Add, BatchNormalization, Concatenate, Conv2D, GlobalAveragePooling2D, Input,
+        MaxPooling2D, Multiply, Reshape, UpSampling2D, ZeroPadding2D)
 
 
 class Mask(Masker):
     """ Neural network to process face image into a segmentation mask of the face """
     def __init__(self, **kwargs):
-        self._is_faceswap = self._check_weights_selection(kwargs.get("configfile"))
+        self._is_faceswap, version = self._check_weights_selection(kwargs.get("configfile"))
 
         git_model_id = 14
-        model_filename = f"bisnet_face_parsing_v{'2' if self._is_faceswap else '1'}.h5"
+        model_filename = f"bisnet_face_parsing_v{version}.h5"
         super().__init__(git_model_id=git_model_id, model_filename=model_filename, **kwargs)
 
         self.name = "BiSeNet - Face Parsing"
@@ -51,13 +59,16 @@ class Mask(Masker):
 
         Returns
         -------
-        bool
-            ``True`` if `faceswap` trained weights have been selected. ``False`` if `original`
-            weights have been selected
+        tuple (bool, int)
+            First position is ``True`` if `faceswap` trained weights have been selected.
+            ``False`` if `original` weights have been selected.
+            Second position is the version of the model to use (``1`` for non-faceswap, ``1`` if
+            faceswap and full-head model is required. ``3`` if faceswap and full-face is required)
         """
         config = _get_config(".".join(self.__module__.split(".")[-2:]), configfile=configfile)
-        retval = config.get("weights", "faceswap").lower() == "faceswap"
-        return retval
+        is_faceswap = config.get("weights", "faceswap").lower() == "faceswap"
+        version = 1 if not is_faceswap else 2 if config.get("include_hair") else 3
+        return is_faceswap, version
 
     def _get_segment_indices(self):
         """ Obtain the segment indices to include within the face mask area based on user

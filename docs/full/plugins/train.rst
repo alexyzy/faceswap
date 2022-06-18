@@ -8,35 +8,46 @@ The Train Package handles the Model and Trainer plugins for training models in F
 .. contents:: Contents
    :local:
 
-model._base module
-==================
+model package
+=============
 
-.. rubric:: Module Summary
+model._base.model module
+------------------------
 
-.. autosummary::
-   :nosignatures:
+.. automodule:: plugins.train.model._base.model
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-   ~plugins.train.model._base.KerasModel
-   ~plugins.train.model._base.ModelBase
-   ~plugins.train.model._base.State
+model._base.settings module
+---------------------------
 
-.. rubric:: Module
+.. automodule:: plugins.train.model._base.settings
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
-.. automodule:: plugins.train.model._base
+model._base.io module
+---------------------
+
+.. automodule:: plugins.train.model._base.io
    :members:
    :undoc-members:
    :show-inheritance:
 
 model.original module
-=====================
+----------------------
 
 .. automodule:: plugins.train.model.original
    :members:
    :undoc-members:
    :show-inheritance:
 
+trainer package
+===============
+
 trainer._base module
-====================
+----------------------
 
 .. automodule:: plugins.train.trainer._base
    :members:
