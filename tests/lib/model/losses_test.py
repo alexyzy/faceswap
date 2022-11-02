@@ -16,6 +16,7 @@ else:
     # Ignore linting errors from Tensorflow's thoroughly broken import system
     from tensorflow.keras import backend as K, losses as k_losses  # pylint:disable=import-error
 
+
 _PARAMS = [(losses.GeneralizedLoss(), (2, 16, 16)),
            (losses.GradientLoss(), (2, 16, 16)),
            # TODO Make sure these output dimensions are correct
@@ -29,8 +30,6 @@ _IDS = [f"{loss}[{get_backend().upper()}]" for loss in _IDS]
 @pytest.mark.parametrize(["loss_func", "output_shape"], _PARAMS, ids=_IDS)
 def test_loss_output(loss_func, output_shape):
     """ Basic shape tests for loss functions. """
-    if get_backend() == "amd" and isinstance(loss_func, losses.GMSDLoss):
-        pytest.skip("GMSD Loss is not currently compatible with PlaidML")
     y_a = K.variable(np.random.random((2, 16, 16, 3)))
     y_b = K.variable(np.random.random((2, 16, 16, 3)))
     objective_output = loss_func(y_a, y_b)
@@ -42,17 +41,19 @@ def test_loss_output(loss_func, output_shape):
 
 
 _LWPARAMS = [losses.DSSIMObjective(),
+             losses.FocalFrequencyLoss(),
              losses.GeneralizedLoss(),
              losses.GMSDLoss(),
              losses.GradientLoss(),
              losses.LaplacianPyramidLoss(),
+             losses.LDRFLIPLoss(),
              losses.LInfNorm(),
-             k_losses.logcosh,
+             losses.LogCosh() if get_backend() == "amd" else k_losses.logcosh,
              k_losses.mean_absolute_error,
              k_losses.mean_squared_error,
              losses.MSSIMLoss()]
-_LWIDS = ["DSSIMObjective", "GeneralizedLoss", "GMSDLoss", "GradientLoss", "LaplacianPyramidLoss",
-          "LInfNorm", "logcosh", "mae", "mse", "MS-SSIM"]
+_LWIDS = ["DSSIMObjective", "FocalFrequencyLosse", "GeneralizedLoss", "GMSDLoss", "GradientLoss",
+          "LaplacianPyramidLoss", "LInfNorm", "LDRFlipLoss", "logcosh", "mae", "mse", "MS-SSIM"]
 _LWIDS = [f"{loss}[{get_backend().upper()}]" for loss in _LWIDS]
 
 
@@ -60,10 +61,8 @@ _LWIDS = [f"{loss}[{get_backend().upper()}]" for loss in _LWIDS]
 def test_loss_wrapper(loss_func):
     """ Test penalized loss wrapper works as expected """
     if get_backend() == "amd":
-        if isinstance(loss_func, losses.GMSDLoss):
-            pytest.skip("GMSD Loss is not currently compatible with PlaidML")
-        if hasattr(loss_func, "__name__") and loss_func.__name__ == "logcosh":
-            pytest.skip("LogCosh Loss is not currently compatible with PlaidML")
+        if isinstance(loss_func, losses.FocalFrequencyLoss):
+            pytest.skip("FocalFrequencyLoss Loss is not currently compatible with PlaidML")
     y_a = K.variable(np.random.random((2, 64, 64, 4)))
     y_b = K.variable(np.random.random((2, 64, 64, 3)))
     p_loss = losses.LossWrapper()

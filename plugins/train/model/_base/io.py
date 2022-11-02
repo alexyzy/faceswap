@@ -52,8 +52,8 @@ def get_all_sub_models(
     Returns
     -------
     list
-        A list of all :class:`keras.models.Model`\s found within the given model. The provided
-        model will always be returned in the first position
+        A list of all :class:`keras.models.Model` objects found within the given model. The
+        provided model will always be returned in the first position
     """
     if models is None:
         models = [model]
@@ -80,11 +80,20 @@ class IO():
     is_predict: bool
         ``True`` if the model is being loaded for inference. ``False`` if the model is being loaded
         for training.
+    save_optimizer: ["never", "always", "exit"]
+        When to save the optimizer weights. `"never"` never saves the optimizer weights. `"always"`
+        always saves the optimizer weights. `"exit"` only saves the optimizer weights on an exit
+        request.
     """
-    def __init__(self, plugin: "ModelBase", model_dir: str, is_predict: bool) -> None:
+    def __init__(self,
+                 plugin: "ModelBase",
+                 model_dir: str,
+                 is_predict: bool,
+                 save_optimizer: Literal["never", "always", "exit"]) -> None:
         self._plugin = plugin
         self._is_predict = is_predict
         self._model_dir = model_dir
+        self._save_optimizer = save_optimizer
         self._history: List[List[float]] = [[], []]  # Loss histories per save iteration
         self._backup = Backup(self._model_dir, self._plugin.name)
 
@@ -163,8 +172,18 @@ class IO():
         logger.info("Loaded model from disk: '%s'", self._filename)
         return model
 
-    def save(self) -> None:
+    def save(self, is_exit: bool = False, force_save_optimizer: bool = False) -> None:
         """ Backup and save the model and state file.
+
+        Parameters
+        ----------
+        is_exit: bool, optional
+            ``True`` if the save request has come from an exit process request otherwise ``False``.
+            Default: ``False``
+
+        force_save_optimizer: bool, optional
+            ``True`` to force saving the optimizer weights with the model, otherwise ``False``.
+            Default:``False``
 
         Notes
         -----
@@ -181,10 +200,14 @@ class IO():
             # pylint:disable=protected-access
             self._backup.backup_model(self._plugin.state._filename)
 
-        self._plugin.model.save(self._filename, include_optimizer=False)
+        include_optimizer = (force_save_optimizer or
+                             self._save_optimizer == "always" or
+                             (self._save_optimizer == "exit" and is_exit))
+
+        self._plugin.model.save(self._filename, include_optimizer=include_optimizer)
         self._plugin.state.save()
 
-        msg = "[Saved models]"
+        msg = "[Saved optimizer state for Snapshot]" if force_save_optimizer else "[Saved models]"
         if save_averages:
             lossmsg = [f"face_{side}: {avg:.5f}"
                        for side, avg in zip(("a", "b"), save_averages)]
@@ -249,6 +272,13 @@ class IO():
         the latest save, hence iteration being reduced by 1.
         """
         logger.debug("Performing snapshot. Iterations: %s", self._plugin.iterations)
+        # self.save(force_save_optimizer=True)
+        # TODO Re-enable saving optimizer state when h5 bug fixed:
+        # File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+        # File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+        # File "h5py/h5d.pyx", line 87, in h5py.h5d.create
+        # ValueError: Unable to create dataset (name already exists)
+
         self._backup.snapshot_models(self._plugin.iterations - 1)
         logger.debug("Performed snapshot")
 
