@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ Processes the augmentation of images for feeding into a Faceswap model. """
+from __future__ import annotations
 from dataclasses import dataclass
 import logging
-from typing import Tuple, TYPE_CHECKING
+import typing as T
 
 import cv2
 import numexpr as ne
@@ -11,17 +12,17 @@ from scipy.interpolate import griddata
 
 from lib.image import batch_convert_color
 
-if TYPE_CHECKING:
-    from plugins.train.trainer._base import ConfigType
+if T.TYPE_CHECKING:
+    from lib.config import ConfigValueType
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class AugConstants:
     """ Dataclass for holding constants for Image Augmentation.
 
-    Paramaters
+    Parameters
     ----------
     clahe_base_contrast: int
         The base number for Contrast Limited Adaptive Histogram Equalization
@@ -56,7 +57,7 @@ class AugConstants:
     transform_zoom: float
     transform_shift: float
     warp_maps: np.ndarray
-    warp_pad: Tuple[int, int]
+    warp_pad: tuple[int, int]
     warp_slices: slice
     warp_lm_edge_anchors: np.ndarray
     warp_lm_grids: np.ndarray
@@ -79,7 +80,7 @@ class ImageAugmentation():
     def __init__(self,
                  batchsize: int,
                  processing_size: int,
-                 config: "ConfigType") -> None:
+                 config: dict[str, ConfigValueType]) -> None:
         logger.debug("Initializing %s: (batchsize: %s, processing_size: %s, "
                      "config: %s)",
                      self.__class__.__name__, batchsize, processing_size, config)
@@ -105,12 +106,29 @@ class ImageAugmentation():
         """
         logger.debug("Initializing constants.")
 
+        # Config variables typing check
+        shift_range = self._config.get("shift_range", 5)
+        color_lightness = self._config.get("color_lightness", 30)
+        color_ab = self._config.get("color_ab", 8)
+        color_clahe_chance = self._config.get("color_clahe_chance", 50)
+        color_clahe_max_size = self._config.get("color_clahe_max_size", 4)
+        rotation_range = self._config.get("rotation_range", 10)
+        zoom_amount = self._config.get("zoom_amount", 5)
+
+        assert isinstance(shift_range, int)
+        assert isinstance(color_lightness, int)
+        assert isinstance(color_ab, int)
+        assert isinstance(color_clahe_chance, int)
+        assert isinstance(color_clahe_max_size, int)
+        assert isinstance(rotation_range, int)
+        assert isinstance(zoom_amount, int)
+
         # Transform
-        tform_shift = (int(self._config.get("shift_range", 5)) / 100) * self._processing_size
+        tform_shift = (shift_range / 100) * self._processing_size
 
         # Color Aug
-        amount_l = int(self._config.get("color_lightness", 30)) / 100
-        amount_ab = int(self._config.get("color_ab", 8)) / 100
+        amount_l = int(color_lightness) / 100
+        amount_ab = int(color_ab) / 100
         lab_adjust = np.array([amount_l, amount_ab, amount_ab], dtype="float32")
 
         # Random Warp
@@ -128,11 +146,11 @@ class ImageAugmentation():
         grids = np.mgrid[0: p_mx: complex(self._processing_size),  # type: ignore
                          0: p_mx: complex(self._processing_size)]  # type: ignore
         retval = AugConstants(clahe_base_contrast=max(2, self._processing_size // 128),
-                              clahe_chance=int(self._config.get("color_clahe_chance", 50)) / 100,
-                              clahe_max_size=int(self._config.get("color_clahe_max_size", 4)),
+                              clahe_chance=color_clahe_chance / 100,
+                              clahe_max_size=color_clahe_max_size,
                               lab_adjust=lab_adjust,
-                              transform_rotation=int(self._config.get("rotation_range", 10)),
-                              transform_zoom=int(self._config.get("zoom_amount", 5)) / 100,
+                              transform_rotation=rotation_range,
+                              transform_zoom=zoom_amount / 100,
                               transform_shift=tform_shift,
                               warp_maps=np.stack((warp_mapx, warp_mapy), axis=1),
                               warp_pad=(warp_pad, warp_pad),
@@ -182,7 +200,7 @@ class ImageAugmentation():
         grid_sizes = (grid_bases * (base_contrast // 2)) + base_contrast
         logger.trace("Adjusting Contrast. Grid Sizes: %s", grid_sizes)  # type: ignore
 
-        clahes = [cv2.createCLAHE(clipLimit=2.0,  # pylint: disable=no-member
+        clahes = [cv2.createCLAHE(clipLimit=2.0,  # pylint:disable=no-member
                                   tileGridSize=(grid_size, grid_size))
                   for grid_size in grid_sizes]
 
@@ -259,7 +277,9 @@ class ImageAugmentation():
         """
         logger.trace("Randomly flipping image")  # type: ignore
         randoms = np.random.rand(self._batchsize)
-        indices = np.where(randoms > int(self._config.get("random_flip", 50)) / 100)[0]
+        flip_chance = self._config.get("random_flip", 50)
+        assert isinstance(flip_chance, int)
+        indices = np.where(randoms > flip_chance / 100)[0]
         batch[indices] = batch[indices, :, ::-1]
         logger.trace("Randomly flipped %s images of %s",  # type: ignore
                      len(indices), self._batchsize)
@@ -313,7 +333,7 @@ class ImageAugmentation():
         slices = self._constants.warp_slices
         rands = np.random.normal(size=(self._batchsize, 2, 5, 5),
                                  scale=self._warp_scale).astype("float32")
-        batch_maps = ne.evaluate("m + r", local_dict=dict(m=self._constants.warp_maps, r=rands))
+        batch_maps = ne.evaluate("m + r", local_dict={"m": self._constants.warp_maps, "r": rands})
         batch_interp = np.array([[cv2.resize(map_, self._constants.warp_pad)[slices, slices]
                                   for map_ in maps]
                                  for maps in batch_maps])

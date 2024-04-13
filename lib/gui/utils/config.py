@@ -1,33 +1,34 @@
 #!/usr/bin python3
 """ Global configuration optiopns for the Faceswap GUI """
+from __future__ import annotations
 import logging
 import os
 import sys
 import tkinter as tk
+import typing as T
 
 from dataclasses import dataclass, field
-from typing import Any, cast, Dict, Optional, Tuple, TYPE_CHECKING
 
 from lib.gui._config import Config as UserConfig
 from lib.gui.project import Project, Tasks
 from lib.gui.theme import Style
 from .file_handler import FileHandler
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from lib.gui.options import CliOptions
     from lib.gui.custom_widgets import StatusBar
     from lib.gui.command import CommandNotebook
     from lib.gui.command import ToolsNotebook
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 PATHCACHE = os.path.join(os.path.realpath(os.path.dirname(sys.argv[0])), "lib", "gui", ".cache")
-_CONFIG: Optional["Config"] = None
+_CONFIG: Config | None = None
 
 
 def initialize_config(root: tk.Tk,
-                      cli_opts: "CliOptions",
-                      statusbar: "StatusBar") -> Optional["Config"]:
+                      cli_opts: CliOptions | None,
+                      statusbar: StatusBar | None) -> Config | None:
     """ Initialize the GUI Master :class:`Config` and add to global constant.
 
     This should only be called once on first GUI startup. Future access to :class:`Config`
@@ -37,10 +38,10 @@ def initialize_config(root: tk.Tk,
     ----------
     root: :class:`tkinter.Tk`
         The root Tkinter object
-    cli_opts: :class:`lib.gui.options.CliOptions`
-        The command line options object
-    statusbar: :class:`lib.gui.custom_widgets.StatusBar`
-        The GUI Status bar
+    cli_opts: :class:`lib.gui.options.CliOptions` or ``None``
+        The command line options object. Must be provided for main GUI. Must be ``None`` for tools
+    statusbar: :class:`lib.gui.custom_widgets.StatusBar` or ``None``
+        The GUI Status bar. Must be provided for main GUI. Must be ``None`` for tools
 
     Returns
     -------
@@ -48,7 +49,7 @@ def initialize_config(root: tk.Tk,
         ``None`` if the config has already been initialized otherwise the global configuration
         options
     """
-    global _CONFIG  # pylint: disable=global-statement
+    global _CONFIG  # pylint:disable=global-statement
     if _CONFIG is not None:
         return None
     logger.debug("Initializing config: (root: %s, cli_opts: %s, "
@@ -145,13 +146,13 @@ class GlobalVariables():
 @dataclass
 class _GuiObjects:
     """ Data class for commonly accessed GUI Objects """
-    cli_opts: "CliOptions"
+    cli_opts: CliOptions | None
     tk_vars: GlobalVariables
     project: Project
     tasks: Tasks
-    status_bar: "StatusBar"
-    default_options: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    command_notebook: Optional["CommandNotebook"] = None
+    status_bar: StatusBar | None
+    default_options: dict[str, dict[str, T.Any]] = field(default_factory=dict)
+    command_notebook: CommandNotebook | None = None
 
 
 class Config():
@@ -165,19 +166,22 @@ class Config():
     ----------
     root: :class:`tkinter.Tk`
         The root Tkinter object
-    cli_opts: :class:`lib.gui.options.CliOpts`
-        The command line options object
-    statusbar: :class:`lib.gui.custom_widgets.StatusBar`
-        The GUI Status bar
+    cli_opts: :class:`lib.gui.options.CliOptions` or ``None``
+        The command line options object. Must be provided for main GUI. Must be ``None`` for tools
+    statusbar: :class:`lib.gui.custom_widgets.StatusBar` or ``None``
+        The GUI Status bar. Must be provided for main GUI. Must be ``None`` for tools
     """
-    def __init__(self, root: tk.Tk, cli_opts: "CliOptions", statusbar: "StatusBar") -> None:
+    def __init__(self,
+                 root: tk.Tk,
+                 cli_opts: CliOptions | None,
+                 statusbar: StatusBar | None) -> None:
         logger.debug("Initializing %s: (root %s, cli_opts: %s, statusbar: %s)",
                      self.__class__.__name__, root, cli_opts, statusbar)
-        self._default_font = cast(dict, tk.font.nametofont("TkDefaultFont").configure())["family"]
-        self._constants = dict(
-            root=root,
-            scaling_factor=self._get_scaling(root),
-            default_font=self._default_font)
+        self._default_font = T.cast(dict,
+                                    tk.font.nametofont("TkDefaultFont").configure())["family"]
+        self._constants = {"root": root,
+                           "scaling_factor": self._get_scaling(root),
+                           "default_font": self._default_font}
         self._gui_objects = _GuiObjects(
             cli_opts=cli_opts,
             tk_vars=GlobalVariables(),
@@ -208,8 +212,11 @@ class Config():
 
     # GUI Objects
     @property
-    def cli_opts(self) -> "CliOptions":
+    def cli_opts(self) -> CliOptions:
         """ :class:`lib.gui.options.CliOptions`: The command line options for this GUI Session. """
+        # This should only be None when a separate tool (not main GUI) is used, at which point
+        # cli_opts do not exist
+        assert self._gui_objects.cli_opts is not None
         return self._gui_objects.cli_opts
 
     @property
@@ -228,42 +235,45 @@ class Config():
         return self._gui_objects.tasks
 
     @property
-    def default_options(self) -> Dict[str, Dict[str, Any]]:
+    def default_options(self) -> dict[str, dict[str, T.Any]]:
         """ dict: The default options for all tabs """
         return self._gui_objects.default_options
 
     @property
-    def statusbar(self) -> "StatusBar":
+    def statusbar(self) -> StatusBar:
         """ :class:`lib.gui.custom_widgets.StatusBar`: The GUI StatusBar
         :class:`tkinter.ttk.Frame`. """
+        # This should only be None when a separate tool (not main GUI) is used, at which point
+        # this statusbar does not exist
+        assert self._gui_objects.status_bar is not None
         return self._gui_objects.status_bar
 
     @property
-    def command_notebook(self) -> Optional["CommandNotebook"]:
+    def command_notebook(self) -> CommandNotebook | None:
         """ :class:`lib.gui.command.CommandNotebook`: The main Faceswap Command Notebook. """
         return self._gui_objects.command_notebook
 
     # Convenience GUI Objects
     @property
-    def tools_notebook(self) -> "ToolsNotebook":
+    def tools_notebook(self) -> ToolsNotebook:
         """ :class:`lib.gui.command.ToolsNotebook`: The Faceswap Tools sub-Notebook. """
         assert self.command_notebook is not None
         return self.command_notebook.tools_notebook
 
     @property
-    def modified_vars(self) -> Dict[str, "tk.BooleanVar"]:
+    def modified_vars(self) -> dict[str, tk.BooleanVar]:
         """ dict: The command notebook modified tkinter variables. """
         assert self.command_notebook is not None
         return self.command_notebook.modified_vars
 
     @property
-    def _command_tabs(self) -> Dict[str, int]:
+    def _command_tabs(self) -> dict[str, int]:
         """ dict: Command tab titles with their IDs. """
         assert self.command_notebook is not None
         return self.command_notebook.tab_names
 
     @property
-    def _tools_tabs(self) -> Dict[str, int]:
+    def _tools_tabs(self) -> dict[str, int]:
         """ dict: Tools command tab titles with their IDs. """
         assert self.command_notebook is not None
         return self.command_notebook.tools_tab_names
@@ -275,17 +285,17 @@ class Config():
         return self._user_config
 
     @property
-    def user_config_dict(self) -> Dict[str, Any]:  # TODO Dataclass
+    def user_config_dict(self) -> dict[str, T.Any]:  # TODO Dataclass
         """ dict: The GUI config in dict form. """
         return self._user_config.config_dict
 
     @property
-    def user_theme(self) -> Dict[str, Any]:  # TODO Dataclass
+    def user_theme(self) -> dict[str, T.Any]:  # TODO Dataclass
         """ dict: The GUI theme selection options. """
         return self._user_theme
 
     @property
-    def default_font(self) -> Tuple[str, int]:
+    def default_font(self) -> tuple[str, int]:
         """ tuple: The selected font as configured in user settings. First item is the font (`str`)
         second item the font size (`int`). """
         font = self.user_config_dict["font"]
@@ -319,7 +329,7 @@ class Config():
         self._gui_objects.default_options = default
         self.project.set_default_options()
 
-    def set_command_notebook(self, notebook: "CommandNotebook") -> None:
+    def set_command_notebook(self, notebook: CommandNotebook) -> None:
         """ Set the command notebook to the :attr:`command_notebook` attribute
         and enable the modified callback for :attr:`project`.
 
@@ -376,7 +386,7 @@ class Config():
         """ Reload the user config from file. """
         self._user_config = UserConfig(None)
 
-    def set_cursor_busy(self, widget: Optional[tk.Widget] = None) -> None:
+    def set_cursor_busy(self, widget: tk.Widget | None = None) -> None:
         """ Set the root or widget cursor to busy.
 
         Parameters
@@ -390,7 +400,7 @@ class Config():
         component.config(cursor="watch")  # type: ignore
         component.update_idletasks()
 
-    def set_cursor_default(self, widget: Optional[tk.Widget] = None) -> None:
+    def set_cursor_default(self, widget: tk.Widget | None = None) -> None:
         """ Set the root or widget cursor to default.
 
         Parameters
@@ -404,7 +414,7 @@ class Config():
         component.config(cursor="")  # type: ignore
         component.update_idletasks()
 
-    def set_root_title(self, text: Optional[str] = None) -> None:
+    def set_root_title(self, text: str | None = None) -> None:
         """ Set the main title text for Faceswap.
 
         The title will always begin with 'Faceswap.py'. Additional text can be appended.

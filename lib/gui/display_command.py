@@ -4,12 +4,12 @@ import datetime
 import gettext
 import logging
 import os
-import sys
 import tkinter as tk
+import typing as T
 
 from tkinter import ttk
-from typing import Dict, Optional, Tuple
 
+from lib.logger import parse_class_init
 from lib.training.preview_tk import PreviewTk
 
 from .display_graph import TrainingGraph
@@ -19,42 +19,36 @@ from .analysis import Calculations, Session
 from .control_helper import set_slider_rounding
 from .utils import FileHandler, get_config, get_images, preview_trigger
 
-if sys.version_info < (3, 8):
-    from typing_extensions import get_args, Literal
-else:
-    from typing import get_args, Literal
-
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
 _ = _LANG.gettext
 
 
-class PreviewExtract(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
+class PreviewExtract(DisplayOptionalPage):  # pylint:disable=too-many-ancestors
     """ Tab to display output preview images for extract and convert """
     def __init__(self, *args, **kwargs) -> None:
-        logger.debug("Initializing %s (args: %s, kwargs: %s)",
-                     self.__class__.__name__, args, kwargs)
+        logger.debug(parse_class_init(locals()))
         self._preview = get_images().preview_extract
         super().__init__(*args, **kwargs)
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def display_item_set(self) -> None:
         """ Load the latest preview if available """
-        logger.trace("Loading latest preview")  # type:ignore
+        logger.trace("Loading latest preview")  # type:ignore[attr-defined]
         size = int(256 if self.command == "convert" else 128 * get_config().scaling_factor)
         if not self._preview.load_latest_preview(thumbnail_size=size,
                                                  frame_dims=(self.winfo_width(),
                                                              self.winfo_height())):
-            logger.trace("Preview not updated")  # type:ignore
+            logger.trace("Preview not updated")  # type:ignore[attr-defined]
             return
         logger.debug("Preview loaded")
         self.display_item = True
 
     def display_item_process(self) -> None:
         """ Display the preview """
-        logger.trace("Displaying preview")  # type:ignore
+        logger.trace("Displaying preview")  # type:ignore[attr-defined]
         if not self.subnotebook.children:
             self.add_child()
         else:
@@ -70,7 +64,7 @@ class PreviewExtract(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
 
     def update_child(self) -> None:
         """ Update the preview image on the label """
-        logger.trace("Updating preview")  # type:ignore
+        logger.trace("Updating preview")  # type:ignore[attr-defined]
         for widget in self.subnotebook_get_widgets():
             widget.configure(image=self._preview.image)
 
@@ -86,13 +80,12 @@ class PreviewExtract(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
         print(f"Saved preview to {filename}")
 
 
-class PreviewTrain(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
+class PreviewTrain(DisplayOptionalPage):  # pylint:disable=too-many-ancestors
     """ Training preview image(s) """
     def __init__(self, *args, **kwargs) -> None:
-        logger.debug("Initializing %s (args: %s, kwargs: %s)",
-                     self.__class__.__name__, args, kwargs)
+        logger.debug(parse_class_init(locals()))
         self._preview = get_images().preview_train
-        self._display: Optional[PreviewTk] = None
+        self._display: PreviewTk | None = None
         super().__init__(*args, **kwargs)
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -142,9 +135,9 @@ class PreviewTrain(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
     def display_item_set(self) -> None:
         """ Load the latest preview if available """
         # TODO This seems to be triggering faster than the waittime
-        logger.trace("Loading latest preview")  # type:ignore
+        logger.trace("Loading latest preview")  # type:ignore[attr-defined]
         if not self._preview.load():
-            logger.trace("Preview not updated")  # type:ignore
+            logger.trace("Preview not updated")  # type:ignore[attr-defined]
             return
         logger.debug("Preview loaded")
         self.display_item = True
@@ -170,17 +163,19 @@ class PreviewTrain(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
         self._display.save(location)
 
 
-class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
+class GraphDisplay(DisplayOptionalPage):  # pylint:disable=too-many-ancestors
     """ The Graph Tab of the Display section """
     def __init__(self,
                  parent: ttk.Notebook,
                  tab_name: str,
                  helptext: str,
                  wait_time: int,
-                 command: Optional[str] = None) -> None:
-        self._trace_vars: Dict[Literal["smoothgraph", "display_iterations"],
-                               Tuple[tk.BooleanVar, str]] = {}
+                 command: str | None = None) -> None:
+        logger.debug(parse_class_init(locals()))
+        self._trace_vars: dict[T.Literal["smoothgraph", "display_iterations"],
+                               tuple[tk.BooleanVar, str]] = {}
         super().__init__(parent, tab_name, helptext, wait_time, command)
+        logger.debug("Initialized %s", self.__class__.__name__)
 
     def set_vars(self) -> None:
         """ Add graphing specific variables to the default variables.
@@ -218,7 +213,8 @@ class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
 
         Pull latest data and run the tab's update code when the tab is selected.
         """
-        logger.debug("Callback received for '%s' tab", self.tabname)
+        logger.debug("Callback received for '%s' tab (display_item: %s)",
+                     self.tabname, self.display_item)
         if self.display_item is not None:
             get_config().tk_vars.refresh_graph.set(True)
         self._update_page()
@@ -332,18 +328,18 @@ class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
     def display_item_set(self) -> None:
         """ Load the graph(s) if available """
         if Session.is_training and Session.logging_disabled:
-            logger.trace("Logs disabled. Hiding graph")  # type:ignore
+            logger.trace("Logs disabled. Hiding graph")  # type:ignore[attr-defined]
             self.set_info("Graph is disabled as 'no-logs' has been selected")
             self.display_item = None
             self._clear_trace_variables()
         elif Session.is_training and self.display_item is None:
-            logger.trace("Loading graph")  # type:ignore
+            logger.trace("Loading graph")  # type:ignore[attr-defined]
             self.display_item = Session
             self._add_trace_variables()
         elif Session.is_training and self.display_item is not None:
-            logger.trace("Graph already displayed. Nothing to do.")  # type:ignore
+            logger.trace("Graph already displayed. Nothing to do.")  # type:ignore[attr-defined]
         else:
-            logger.trace("Clearing graph")  # type:ignore
+            logger.trace("Clearing graph")  # type:ignore[attr-defined]
             self.display_item = None
             self._clear_trace_variables()
 
@@ -354,7 +350,6 @@ class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
             self.after(1000, self.display_item_process)
             return
 
-        logger.debug("Adding graph")
         existing = list(self.subnotebook_get_titles_ids().keys())
 
         loss_keys = self.display_item.get_loss_keys(Session.session_ids[-1])
@@ -371,6 +366,7 @@ class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
             tabname = loss_key.replace("_", " ").title()
             if tabname in existing:
                 continue
+            logger.debug("Adding graph '%s'", tabname)
 
             display_keys = [key for key in loss_keys if key.startswith(loss_key)]
             data = Calculations(session_id=Session.session_ids[-1],
@@ -446,7 +442,7 @@ class GraphDisplay(DisplayOptionalPage):  # pylint: disable=too-many-ancestors
 
     def _add_trace_variables(self) -> None:
         """ Add tracing for when the option sliders are updated, for updating the graph. """
-        for name, action in zip(get_args(Literal["smoothgraph", "display_iterations"]),
+        for name, action in zip(T.get_args(T.Literal["smoothgraph", "display_iterations"]),
                                 (self._smooth_amount_callback, self._iteration_limit_callback)):
             var = self.vars[name]
             if name not in self._trace_vars:

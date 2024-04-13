@@ -10,18 +10,20 @@ import gettext
 import tkinter as tk
 from tkinter import ttk
 
+from lib.logger import parse_class_init
+
 from .display_analysis import Analysis
 from .display_command import GraphDisplay, PreviewExtract, PreviewTrain
 from .utils import get_config
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
 _ = _LANG.gettext
 
 
-class DisplayNotebook(ttk.Notebook):  # pylint: disable=too-many-ancestors
+class DisplayNotebook(ttk.Notebook):  # pylint:disable=too-many-ancestors
     """ The tkinter Notebook that holds the display items.
 
     Parameters
@@ -31,7 +33,7 @@ class DisplayNotebook(ttk.Notebook):  # pylint: disable=too-many-ancestors
     """
 
     def __init__(self, parent):
-        logger.debug("Initializing %s", self.__class__.__name__)
+        logger.debug(parse_class_init(locals()))
         super().__init__(parent)
         parent.add(self)
         tk_vars = get_config().tk_vars
@@ -150,7 +152,7 @@ class DisplayNotebook(ttk.Notebook):  # pylint: disable=too-many-ancestors
             child_object.close()  # Call the OptionalDisplayPage close() method
             self.forget(child)
 
-    def _update_displaybook(self, *args):  # pylint: disable=unused-argument
+    def _update_displaybook(self, *args):  # pylint:disable=unused-argument
         """ Callback to be executed when the global tkinter variable `display`
         (:attr:`wrapper_var`) is updated when a Faceswap task is executed.
 

@@ -1,5 +1,6 @@
 #!/usr/bin/python
 """ Logging Functions for Faceswap. """
+# NOTE: Don't import non stdlib packages. This module is accessed by setup.py
 import collections
 import logging
 from logging.handlers import RotatingFileHandler
@@ -7,11 +8,22 @@ import os
 import platform
 import re
 import sys
+import typing as T
 import time
 import traceback
 
 from datetime import datetime
-from typing import Union
+
+
+# TODO - Remove this monkey patch when TF autograph fixed to handle newer logging lib
+def _patched_format(self, record):
+    """ Autograph tf-2.10 has a bug with the 3.10 version of logging.PercentStyle._format(). It is
+    non-critical but spits out warnings. This is the Python 3.9 version of the function and should
+    be removed once fixed """
+    return self._fmt % record.__dict__  # pylint:disable=protected-access
+
+
+setattr(logging.PercentStyle, "_format", _patched_format)
 
 
 class FaceswapLogger(logging.Logger):
@@ -76,11 +88,11 @@ class ColoredFormatter(logging.Formatter):
     def __init__(self, fmt: str, pad_newlines: bool = False, **kwargs) -> None:
         super().__init__(fmt, **kwargs)
         self._use_color = self._get_color_compatibility()
-        self._level_colors = dict(CRITICAL="\033[31m",  # red
-                                  ERROR="\033[31m",  # red
-                                  WARNING="\033[33m",  # yellow
-                                  INFO="\033[32m",  # green
-                                  VERBOSE="\033[34m")  # blue
+        self._level_colors = {"CRITICAL": "\033[31m",  # red
+                              "ERROR": "\033[31m",  # red
+                              "WARNING": "\033[33m",  # yellow
+                              "INFO": "\033[32m",  # green
+                              "VERBOSE": "\033[34m"}  # blue
         self._default_color = "\033[0m"
         self._newline_padding = self._get_newline_padding(pad_newlines, fmt)
 
@@ -133,7 +145,7 @@ class ColoredFormatter(logging.Formatter):
     def _get_sample_time_string(self) -> int:
         """ Obtain a sample time string and calculate correct padding.
 
-        This may be inaccurate wheb ticking over an integer from single to double digits, but that
+        This may be inaccurate when ticking over an integer from single to double digits, but that
         shouldn't be a huge issue.
 
         Returns
@@ -412,7 +424,7 @@ def _file_handler(loglevel,
     return handler
 
 
-def _stream_handler(loglevel: int, is_gui: bool) -> Union[logging.StreamHandler, TqdmHandler]:
+def _stream_handler(loglevel: int, is_gui: bool) -> logging.StreamHandler | TqdmHandler:
     """ Add a stream handler for the current Faceswap session. The stream handler will only ever
     output at a maximum of VERBOSE level to avoid spamming the console.
 
@@ -531,6 +543,52 @@ def crash_log() -> str:
         outfile.write(original_traceback)
         outfile.write(sysinfo.encode("utf-8"))
     return filename
+
+
+def _process_value(value: T.Any) -> T.Any:
+    """ Process the values from a local dict and return in a loggable format
+
+    Parameters
+    ----------
+    value: Any
+        The dictionary value
+
+    Returns
+    -------
+    Any
+        The original or ammended value
+    """
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, (list, tuple, set)) and len(value) > 10:
+        return f'[type: "{type(value).__name__}" len: {len(value)}'
+
+    try:
+        import numpy as np  # pylint:disable=import-outside-toplevel
+    except ImportError:
+        return value
+
+    if isinstance(value, np.ndarray) and np.prod(value.shape) > 10:
+        return f'[type: "{type(value).__name__}" shape: {value.shape}, dtype: "{value.dtype}"]'
+    return value
+
+
+def parse_class_init(locals_dict: dict[str, T.Any]) -> str:
+    """ Parse a locals dict from a class and return in a format suitable for logging
+    Parameters
+    ----------
+    locals_dict: dict[str, T.Any]
+        A locals() dictionary from a newly initialized class
+    Returns
+    -------
+    str
+        The locals information suitable for logging
+    """
+    delimit = {k: _process_value(v)
+               for k, v in locals_dict.items() if k != "self"}
+    dsp = ", ".join(f"{k}: {v}" for k, v in delimit.items())
+    dsp = f" ({dsp})" if dsp else ""
+    return f"Initializing {locals_dict['self'].__class__.__name__}{dsp}"
 
 
 _OLD_FACTORY = logging.getLogRecordFactory()

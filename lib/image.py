@@ -1,17 +1,18 @@
 #!/usr/bin python3
 """ Utilities for working with images and videos """
-
+from __future__ import annotations
+import json
 import logging
 import re
 import subprocess
 import os
 import struct
 import sys
+import typing as T
 
 from ast import literal_eval
 from bisect import bisect
 from concurrent import futures
-from typing import Optional
 from zlib import crc32
 
 import cv2
@@ -22,9 +23,12 @@ from tqdm import tqdm
 
 from lib.multithreading import MultiThread
 from lib.queue_manager import queue_manager, QueueEmpty
-from lib.utils import convert_to_secs, FaceswapError, _video_extensions, get_image_paths
+from lib.utils import convert_to_secs, FaceswapError, VIDEO_EXTENSIONS, get_image_paths
 
-logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
+if T.TYPE_CHECKING:
+    from lib.align.alignments import PNGHeaderDict
+
+logger = logging.getLogger(__name__)
 
 # ################### #
 # <<< IMAGE UTILS >>> #
@@ -144,7 +148,7 @@ class FfmpegReader(imageio.plugins.ffmpeg.FfmpegFormat.Reader):  # type:ignore
         logger.trace("keyframe pts_time: %s, keyframe: %s", prev_pts_time, prev_keyframe)
         return prev_pts_time, prev_keyframe
 
-    def _initialize(self, index=0):
+    def _initialize(self, index=0):  # noqa:C901
         """ Replace ImageIO _initialize with a version that explictly uses keyframes.
 
         Notes
@@ -155,7 +159,7 @@ class FfmpegReader(imageio.plugins.ffmpeg.FfmpegFormat.Reader):  # type:ignore
         correct frame for all videos. Navigating to the previous keyframe then discarding frames
         until the correct frame is reached appears to work well.
         """
-        # pylint: disable-all
+        # pylint:disable-all
         if self._read_gen is not None:
             self._read_gen.close()
 
@@ -292,16 +296,16 @@ def read_image(filename, raise_error=False, with_metadata=False):
     success = True
     image = None
     try:
-        if not with_metadata:
-            retval = cv2.imread(filename)
-            if retval is None:
+        with open(filename, "rb") as infile:
+            raw_file = infile.read()
+            image = cv2.imdecode(np.frombuffer(raw_file, dtype="uint8"), cv2.IMREAD_COLOR)
+            if image is None:
                 raise ValueError("Image is None")
-        else:
-            with open(filename, "rb") as infile:
-                raw_file = infile.read()
+            if with_metadata:
                 metadata = png_read_meta(raw_file)
-            image = cv2.imdecode(np.frombuffer(raw_file, dtype="uint8"), cv2.IMREAD_UNCHANGED)
-            retval = (image, metadata)
+                retval = (image, metadata)
+            else:
+                retval = image
     except TypeError as err:
         success = False
         msg = "Error while reading image (TypeError): '{}'".format(filename)
@@ -430,10 +434,11 @@ def read_image_meta(filename):
             elif field == b"iTXt":
                 keyword, value = infile.read(length).split(b"\0", 1)
                 if keyword == b"faceswap":
-                    retval["itxt"] = literal_eval(value[4:].decode("utf-8"))
+                    retval["itxt"] = literal_eval(value[4:].decode("utf-8", errors="replace"))
                     break
                 else:
-                    logger.trace("Skipping iTXt chunk: '%s'", keyword.decode("latin-1", "ignore"))
+                    logger.trace("Skipping iTXt chunk: '%s'", keyword.decode("latin-1",
+                                                                             errors="ignore"))
                     length = 0  # Reset marker for next chunk
             infile.seek(length + 4, 1)
     logger.trace("filename: %s, metadata: %s", filename, retval)
@@ -552,7 +557,10 @@ def update_existing_metadata(filename, metadata):
     os.replace(tmp_filename, filename)
 
 
-def encode_image(image, extension, metadata=None):
+def encode_image(image: np.ndarray,
+                 extension: str,
+                 encoding_args: tuple[int, ...] | None = None,
+                 metadata: PNGHeaderDict | dict[str, T.Any] | bytes | None = None) -> bytes:
     """ Encode an image.
 
     Parameters
@@ -561,9 +569,12 @@ def encode_image(image, extension, metadata=None):
         The image to be encoded in `BGR` channel order.
     extension: str
         A compatible `cv2` image file extension that the final image is to be saved to.
-    metadata: dict, optional
-        Metadata for the image. If provided, and the extension is png, this information will be
-        written to the PNG itxt header. Default:``None``
+    encoding_args: tuple[int, ...], optional
+        Any encoding arguments to pass to cv2's imencode function
+    metadata: dict or bytes, optional
+        Metadata for the image. If provided, and the extension is png or tiff, this information
+        will be written to the PNG itxt header. Default:``None`` Can be provided as a python dict
+        or pre-encoded
 
     Returns
     -------
@@ -576,20 +587,23 @@ def encode_image(image, extension, metadata=None):
     >>> image = read_image(image_file)
     >>> encoded_image = encode_image(image, ".jpg")
     """
-    if metadata and extension.lower() != ".png":
-        raise ValueError("Metadata is only supported for .png images")
-    retval = cv2.imencode(extension, image)[1]
+    if metadata and extension.lower() not in (".png", ".tif"):
+        raise ValueError("Metadata is only supported for .png and .tif images")
+    args = tuple() if encoding_args is None else encoding_args
+
+    retval = cv2.imencode(extension, image, args)[1]
     if metadata:
-        retval = np.frombuffer(png_write_meta(retval.tobytes(), metadata), dtype="uint8")
+        func = {".png": png_write_meta, ".tif": tiff_write_meta}[extension]
+        retval = func(retval.tobytes(), metadata)  # type:ignore[arg-type]
     return retval
 
 
-def png_write_meta(png, data):
+def png_write_meta(image: bytes, data: PNGHeaderDict | dict[str, T.Any] | bytes) -> bytes:
     """ Write Faceswap information to a png's iTXt field.
 
     Parameters
     ----------
-    png: bytes
+    image: bytes
         The bytes encoded png file to write header data to
     data: dict or bytes
         The dictionary to write to the header. Can be pre-encoded as utf-8.
@@ -605,17 +619,115 @@ def png_write_meta(png, data):
     PNG Specification: https://www.w3.org/TR/2003/REC-PNG-20031110/
 
     """
-    split = png.find(b"IDAT") - 4
-    retval = png[:split] + pack_to_itxt(data) + png[split:]
+    split = image.find(b"IDAT") - 4
+    retval = image[:split] + pack_to_itxt(data) + image[split:]
     return retval
 
 
-def png_read_meta(png):
-    """ Read the Faceswap information stored in a png's iTXt field.
+def tiff_write_meta(image: bytes, data: dict[str, T.Any] | bytes) -> bytes:
+    """ Write Faceswap information to a tiff's image_description field.
 
     Parameters
     ----------
     png: bytes
+        The bytes encoded tiff file to write header data to
+    data: dict or bytes
+        The data to write to the image-description field. If provided as a dict, then it should be
+        a json serializable object, otherwise it should be data encoded as ascii bytes
+
+    Notes
+    -----
+    This handles a very specific task of adding, and populating, an ImageDescription field in a
+    Tiff file generated by OpenCV. For any other usecases it will likely fail
+    """
+    if not isinstance(data, bytes):
+        data = json.dumps(data, ensure_ascii=True).encode("ascii")
+
+    assert image[:2] == b"II", "Not a supported TIFF file"
+    assert struct.unpack("<H", image[2:4])[0] == 42, "Only version 42 Tiff files are supported"
+    ptr = struct.unpack("<I", image[4:8])[0]
+    rendered = image[:ptr]  # Pack up to IFD
+
+    num_tags = struct.unpack("<H", image[ptr: ptr + 2])[0]
+    ptr += 2
+    rendered += struct.pack("<H", num_tags + 1)  # Pack new IFD field count
+    remainder = image[ptr + num_tags * 12:]  # Hold the data from after the IFD
+    assert struct.unpack("<I", remainder[:4])[0] == 0, "Multi-page TIFF files not supported"
+
+    dtypes = {2: "1s", 3: "1H", 4: "1I", 7: '1B'}
+
+    ifd = b""
+    insert_idx = -1
+    for i in range(num_tags):
+        tag = image[ptr + i * 12:ptr + (1 + i) * 12]
+
+        tag_id = struct.unpack("<H", tag[0:2])[0]
+        assert tag_id != 270, "Not a supported TIFF file"
+
+        tag_count = struct.unpack("<I", tag[4:8])[0]
+        tag_type = dtypes[struct.unpack("<H", tag[2:4])[0]]
+        size = tag_count * struct.calcsize(tag_type)
+
+        if insert_idx < 0 and tag_id > 270:
+            insert_idx = i  # Log insert location of image description
+
+        if size <= 4:  # value in offset column
+            ifd += tag
+            continue
+
+        ifd += tag[:8]
+        tag_offset = struct.unpack("<I", tag[8:12])[0]
+        new_offset = struct.pack("<I", tag_offset + 12)  # Increment by length of new ifd entry
+        ifd += new_offset
+
+    end = len(rendered) + len(ifd) + 12 + len(remainder)
+    desc = struct.pack("HH", 270, 2)
+    desc += struct.pack("II", len(data), end)
+    # TODO confirm no extra pages in end of IFD
+
+    rendered += ifd[:insert_idx * 12] + desc + ifd[insert_idx * 12:] + remainder + data
+    return rendered
+
+
+def tiff_read_meta(image: bytes) -> dict[str, T.Any]:
+    """ Read information stored in a Tiff's Image Description field """
+    assert image[:2] == b"II", "Not a supported TIFF file"
+    assert struct.unpack("<H", image[2:4])[0] == 42, "Only version 42 Tiff files are supported"
+    ptr = struct.unpack("<I", image[4:8])[0]
+
+    num_tags = struct.unpack("<H", image[ptr: ptr + 2])[0]
+    ptr += 2
+    ifd_end = ptr + num_tags * 12
+    ifd = image[ptr: ifd_end]
+    next_ifd = struct.unpack("<I", image[ifd_end:ifd_end + 4])[0]
+    assert next_ifd == 0, "Multi-page TIFF files not supported"
+
+    dtypes = {2: "1s", 3: "1H", 4: "1I", 7: '1B'}
+    data = None
+    for i in range(num_tags):
+        tag = ifd[i * 12:(1 + i) * 12]
+        tag_id = struct.unpack("<H", tag[0:2])[0]
+        if tag_id != 270:
+            continue
+
+        tag_count = struct.unpack("<I", tag[4:8])[0]
+        tag_type = dtypes[struct.unpack("<H", tag[2:4])[0]]
+        size = tag_count * struct.calcsize(tag_type)
+        tag_offset = struct.unpack("<I", tag[8:12])[0]
+
+        data = image[tag_offset: tag_offset + size]
+
+    assert data is not None, "No Metadata found in Tiff File"
+    retval = json.loads(data.decode("ascii"))
+    return retval
+
+
+def png_read_meta(image):
+    """ Read the Faceswap information stored in a png's iTXt field.
+
+    Parameters
+    ----------
+    image: bytes
         The bytes encoded png file to read header data from
 
     Returns
@@ -632,17 +744,17 @@ def png_read_meta(png):
     retval = None
     pointer = 0
     while True:
-        pointer = png.find(b"iTXt", pointer) - 4
+        pointer = image.find(b"iTXt", pointer) - 4
         if pointer < 0:
             logger.trace("No metadata in png")
             break
-        length = struct.unpack(">I", png[pointer:pointer + 4])[0]
+        length = struct.unpack(">I", image[pointer:pointer + 4])[0]
         pointer += 8
-        keyword, value = png[pointer:pointer + length].split(b"\0", 1)
+        keyword, value = image[pointer:pointer + length].split(b"\0", 1)
         if keyword == b"faceswap":
-            retval = literal_eval(value[4:].decode("utf-8"))
+            retval = literal_eval(value[4:].decode("utf-8", errors="ignore"))
             break
-        logger.trace("Skipping iTXt chunk: '%s'", keyword.decode("latin-1", "ignore"))
+        logger.trace("Skipping iTXt chunk: '%s'", keyword.decode("latin-1", errors="ignore"))
         pointer += length + 4
     return retval
 
@@ -794,7 +906,7 @@ def count_frames(filename, fast=False):
     process = subprocess.Popen(cmd,
                                stderr=subprocess.STDOUT,
                                stdout=subprocess.PIPE,
-                               universal_newlines=True)
+                               universal_newlines=True, encoding="utf8")
     pbar = None
     duration = None
     init_tqdm = False
@@ -889,9 +1001,10 @@ class ImageIO():
 
     def _set_thread(self):
         """ Set the background thread for the load and save iterators and launch it. """
-        logger.debug("Setting thread")
+        logger.trace("Setting thread")  # type:ignore[attr-defined]
         if self._thread is not None and self._thread.is_alive():
-            logger.debug("Thread pre-exists and is alive: %s", self._thread)
+            logger.trace("Thread pre-exists and is alive: %s",  # type:ignore[attr-defined]
+                         self._thread)
             return
         self._thread = MultiThread(self._process,
                                    self._queue,
@@ -915,6 +1028,7 @@ class ImageIO():
         logger.debug("Received Close")
         if self._thread is not None:
             self._thread.join()
+        del self._thread
         self._thread = None
         logger.debug("Closed")
 
@@ -1032,9 +1146,9 @@ class ImagesLoader(ImageIO):
             If the given location is a file and does not have a valid video extension.
 
         """
-        if os.path.isdir(self.location):
+        if not isinstance(self.location, str) or os.path.isdir(self.location):
             retval = False
-        elif os.path.splitext(self.location)[1].lower() in _video_extensions:
+        elif os.path.splitext(self.location)[1].lower() in VIDEO_EXTENSIONS:
             retval = True
         else:
             raise FaceswapError("The input file '{}' is not a valid video".format(self.location))
@@ -1423,7 +1537,10 @@ class ImagesSaver(ImageIO):
             executor.submit(self._save, *item)
         executor.shutdown()
 
-    def _save(self, filename: str, image: bytes, sub_folder: Optional[str]) -> None:
+    def _save(self,
+              filename: str,
+              image: bytes | np.ndarray,
+              sub_folder: str | None) -> None:
         """ Save a single image inside a ThreadPoolExecutor
 
         Parameters
@@ -1431,8 +1548,8 @@ class ImagesSaver(ImageIO):
         filename: str
             The filename of the image to be saved. NB: Any folders passed in with the filename
             will be stripped and replaced with :attr:`location`.
-        image: bytes
-            The encoded image to be saved
+        image: bytes or :class:`numpy.ndarray`
+            The encoded image or numpy array to be saved
         subfolder: str or ``None``
             If the file should be saved in a subfolder in the output location, the subfolder should
             be provided here. ``None`` for no subfolder.
@@ -1444,15 +1561,21 @@ class ImagesSaver(ImageIO):
         filename = os.path.join(location, os.path.basename(filename))
         try:
             if self._as_bytes:
+                assert isinstance(image, bytes)
                 with open(filename, "wb") as out_file:
                     out_file.write(image)
             else:
                 cv2.imwrite(filename, image)
             logger.trace("Saved image: '%s'", filename)  # type:ignore
-        except Exception as err:  # pylint: disable=broad-except
-            logger.error("Failed to save image '%s'. Original Error: %s", filename, err)
+        except Exception as err:  # pylint:disable=broad-except
+            logger.error("Failed to save image '%s'. Original Error: %s", filename, str(err))
+        del image
+        del filename
 
-    def save(self, filename: str, image: bytes, sub_folder: Optional[str] = None) -> None:
+    def save(self,
+             filename: str,
+             image: bytes | np.ndarray,
+             sub_folder: str | None = None) -> None:
         """ Save the given image in the background thread
 
         Ensure that :func:`close` is called once all save operations are complete.

@@ -2,24 +2,15 @@
 """ File browser utility functions for the Faceswap GUI. """
 import logging
 import platform
-import sys
 import tkinter as tk
 from tkinter import filedialog
+import typing as T
 
-from typing import cast, Dict, IO, List, Optional, Tuple, Union
-
-if sys.version_info < (3, 8):
-    from typing_extensions import Literal
-else:
-    from typing import Literal
-
-
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-
-_FILETYPE = Literal["default", "alignments", "config_project", "config_task",
-                    "config_all", "csv", "image", "ini", "state", "log", "video"]
-_HANDLETYPE = Literal["open", "save", "filename", "filename_multi", "save_filename",
-                      "context", "dir"]
+logger = logging.getLogger(__name__)
+_FILETYPE = T.Literal["default", "alignments", "config_project", "config_task",
+                      "config_all", "csv", "image", "ini", "state", "log", "video"]
+_HANDLETYPE = T.Literal["open", "save", "filename", "filename_multi", "save_filename",
+                        "context", "dir"]
 
 
 class FileHandler():  # pylint:disable=too-few-public-methods
@@ -54,6 +45,8 @@ class FileHandler():  # pylint:disable=too-few-public-methods
     variable: str, optional
         Required for context handling file dialog, otherwise unused. The variable to associate
         with this file dialog. Default: ``None``
+    parent: :class:`tkinter.Frame`, optional
+        The parent that is launching the file dialog. ``None`` sets this to root. Default: ``None``
 
     Attributes
     ----------
@@ -70,17 +63,18 @@ class FileHandler():  # pylint:disable=too-few-public-methods
 
     def __init__(self,
                  handle_type: _HANDLETYPE,
-                 file_type: Optional[_FILETYPE],
-                 title: Optional[str] = None,
-                 initial_folder: Optional[str] = None,
-                 initial_file: Optional[str] = None,
-                 command: Optional[str] = None,
-                 action: Optional[str] = None,
-                 variable: Optional[str] = None) -> None:
+                 file_type: _FILETYPE | None,
+                 title: str | None = None,
+                 initial_folder: str | None = None,
+                 initial_file: str | None = None,
+                 command: str | None = None,
+                 action: str | None = None,
+                 variable: str | None = None,
+                 parent: tk.Frame | None = None) -> None:
         logger.debug("Initializing %s: (handle_type: '%s', file_type: '%s', title: '%s', "
                      "initial_folder: '%s', initial_file: '%s', command: '%s', action: '%s', "
-                     "variable: %s)", self.__class__.__name__, handle_type, file_type, title,
-                     initial_folder, initial_file, command, action, variable)
+                     "variable: %s, parent: %s)", self.__class__.__name__, handle_type, file_type,
+                     title, initial_folder, initial_file, command, action, variable, parent)
         self._handletype = handle_type
         self._dummy_master = self._set_dummy_master()
         self._defaults = self._set_defaults()
@@ -90,42 +84,43 @@ class FileHandler():  # pylint:disable=too-few-public-methods
                                         file_type,
                                         command,
                                         action,
-                                        variable)
+                                        variable,
+                                        parent)
         self.return_file = getattr(self, f"_{self._handletype.lower()}")()
         self._remove_dummy_master()
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
     @property
-    def _filetypes(self) -> Dict[str, List[Tuple[str, str]]]:
+    def _filetypes(self) -> dict[str, list[tuple[str, str]]]:
         """ dict: The accepted extensions for each file type for opening/saving """
         all_files = ("All files", "*.*")
-        filetypes = dict(
-            default=[all_files],
-            alignments=[("Faceswap Alignments", "*.fsa"), all_files],
-            config_project=[("Faceswap Project files", "*.fsw"), all_files],
-            config_task=[("Faceswap Task files", "*.fst"), all_files],
-            config_all=[("Faceswap Project and Task files", "*.fst *.fsw"), all_files],
-            csv=[("Comma separated values", "*.csv"), all_files],
-            image=[("Bitmap", "*.bmp"),
-                   ("JPG", "*.jpeg *.jpg"),
-                   ("PNG", "*.png"),
-                   ("TIFF", "*.tif *.tiff"),
-                   all_files],
-            ini=[("Faceswap config files", "*.ini"), all_files],
-            json=[("JSON file", "*.json"), all_files],
-            model=[("Keras model files", "*.h5"), all_files],
-            state=[("State files", "*.json"), all_files],
-            log=[("Log files", "*.log"), all_files],
-            video=[("Audio Video Interleave", "*.avi"),
-                   ("Flash Video", "*.flv"),
-                   ("Matroska", "*.mkv"),
-                   ("MOV", "*.mov"),
-                   ("MP4", "*.mp4"),
-                   ("MPEG", "*.mpeg *.mpg *.ts *.vob"),
-                   ("WebM", "*.webm"),
-                   ("Windows Media Video", "*.wmv"),
-                   all_files])
+        filetypes = {
+            "default": [all_files],
+            "alignments": [("Faceswap Alignments", "*.fsa"), all_files],
+            "config_project": [("Faceswap Project files", "*.fsw"), all_files],
+            "config_task": [("Faceswap Task files", "*.fst"), all_files],
+            "config_all": [("Faceswap Project and Task files", "*.fst *.fsw"), all_files],
+            "csv": [("Comma separated values", "*.csv"), all_files],
+            "image": [("Bitmap", "*.bmp"),
+                      ("JPG", "*.jpeg *.jpg"),
+                      ("PNG", "*.png"),
+                      ("TIFF", "*.tif *.tiff"),
+                      all_files],
+            "ini": [("Faceswap config files", "*.ini"), all_files],
+            "json": [("JSON file", "*.json"), all_files],
+            "model": [("Keras model files", "*.h5"), all_files],
+            "state": [("State files", "*.json"), all_files],
+            "log": [("Log files", "*.log"), all_files],
+            "video": [("Audio Video Interleave", "*.avi"),
+                      ("Flash Video", "*.flv"),
+                      ("Matroska", "*.mkv"),
+                      ("MOV", "*.mov"),
+                      ("MP4", "*.mp4"),
+                      ("MPEG", "*.mpeg *.mpg *.ts *.vob"),
+                      ("WebM", "*.webm"),
+                      ("Windows Media Video", "*.wmv"),
+                      all_files]}
 
         # Add in multi-select options and upper case extensions for Linux
         for key in filetypes:
@@ -138,32 +133,32 @@ class FileHandler():  # pylint:disable=too-few-public-methods
                 multi = [f"{key.title()} Files"]
                 multi.append(" ".join([ftype[1]
                                        for ftype in filetypes[key] if ftype[0] != "All files"]))
-                filetypes[key].insert(0, cast(Tuple[str, str], tuple(multi)))
+                filetypes[key].insert(0, T.cast(tuple[str, str], tuple(multi)))
         return filetypes
 
     @property
-    def _contexts(self) -> Dict[str, Dict[str, Union[str, Dict[str, str]]]]:
+    def _contexts(self) -> dict[str, dict[str, str | dict[str, str]]]:
         """dict: Mapping of commands, actions and their corresponding file dialog for context
         handle types. """
-        return dict(effmpeg=dict(input={"extract": "filename",
-                                        "gen-vid": "dir",
-                                        "get-fps": "filename",
-                                        "get-info": "filename",
-                                        "mux-audio": "filename",
-                                        "rescale": "filename",
-                                        "rotate": "filename",
-                                        "slice": "filename"},
-                                 output={"extract": "dir",
-                                         "gen-vid": "save_filename",
-                                         "get-fps": "nothing",
-                                         "get-info": "nothing",
-                                         "mux-audio": "save_filename",
-                                         "rescale": "save_filename",
-                                         "rotate": "save_filename",
-                                         "slice": "save_filename"}))
+        return {"effmpeg": {"input": {"extract": "filename",
+                                      "gen-vid": "dir",
+                                      "get-fps": "filename",
+                                      "get-info": "filename",
+                                      "mux-audio": "filename",
+                                      "rescale": "filename",
+                                      "rotate": "filename",
+                                      "slice": "filename"},
+                            "output": {"extract": "dir",
+                                       "gen-vid": "save_filename",
+                                       "get-fps": "nothing",
+                                       "get-info": "nothing",
+                                       "mux-audio": "save_filename",
+                                       "rescale": "save_filename",
+                                       "rotate": "save_filename",
+                                       "slice": "save_filename"}}}
 
     @classmethod
-    def _set_dummy_master(cls) -> Optional[tk.Frame]:
+    def _set_dummy_master(cls) -> tk.Frame | None:
         """ Add an option to force black font on Linux file dialogs KDE issue that displays light
         font on white background).
 
@@ -179,7 +174,7 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         if platform.system().lower() == "linux":
             frame = tk.Frame()
             frame.option_add("*foreground", "black")
-            retval: Optional[tk.Frame] = frame
+            retval: tk.Frame | None = frame
         else:
             retval = None
         return retval
@@ -192,7 +187,7 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         del self._dummy_master
         self._dummy_master = None
 
-    def _set_defaults(self) -> Dict[str, Optional[str]]:
+    def _set_defaults(self) -> dict[str, str | None]:
         """ Set the default file type for the file dialog. Generally the first found file type
         will be used, but this is overridden if it is not appropriate.
 
@@ -201,7 +196,7 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         dict:
             The default file extension for each file type
         """
-        defaults: Dict[str, Optional[str]] = {
+        defaults: dict[str, str | None] = {
             key: next(ext for ext in val[0][1].split(" ")).replace("*", "")
             for key, val in self._filetypes.items()}
         defaults["default"] = None
@@ -211,14 +206,15 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         return defaults
 
     def _set_kwargs(self,
-                    title: Optional[str],
-                    initial_folder: Optional[str],
-                    initial_file: Optional[str],
-                    file_type: Optional[_FILETYPE],
-                    command: Optional[str],
-                    action: Optional[str],
-                    variable: Optional[str] = None
-                    ) -> Dict[str, Union[None, tk.Frame, str, List[Tuple[str, str]]]]:
+                    title: str | None,
+                    initial_folder: str | None,
+                    initial_file: str | None,
+                    file_type: _FILETYPE | None,
+                    command: str | None,
+                    action: str | None,
+                    variable: str | None,
+                    parent: tk.Frame | None
+                    ) -> dict[str, None | tk.Frame | str | list[tuple[str, str]]]:
         """ Generate the required kwargs for the requested file dialog browser.
 
         Parameters
@@ -241,6 +237,8 @@ class FileHandler():  # pylint:disable=too-few-public-methods
         variable: str, optional
             Required for context handling file dialog, otherwise unused. The variable to associate
             with this file dialog. Default: ``None``
+        parent: :class:`tkinter.Frame`
+            The parent that is launching the file dialog. ``None`` sets this to root
 
         Returns
         -------
@@ -248,11 +246,12 @@ class FileHandler():  # pylint:disable=too-few-public-methods
             The key word arguments for the file dialog to be launched
         """
         logger.debug("Setting Kwargs: (title: %s, initial_folder: %s, initial_file: '%s', "
-                     "file_type: '%s', command: '%s': action: '%s', variable: '%s')",
-                     title, initial_folder, initial_file, file_type, command, action, variable)
+                     "file_type: '%s', command: '%s': action: '%s', variable: '%s', parent: %s)",
+                     title, initial_folder, initial_file, file_type, command, action, variable,
+                     parent)
 
-        kwargs: Dict[str, Union[None, tk.Frame, str,
-                                List[Tuple[str, str]]]] = dict(master=self._dummy_master)
+        kwargs: dict[str, None | tk.Frame | str | list[tuple[str, str]]] = {
+            "master": self._dummy_master}
 
         if self._handletype.lower() == "context":
             assert command is not None and action is not None and variable is not None
@@ -266,6 +265,9 @@ class FileHandler():  # pylint:disable=too-few-public-methods
 
         if initial_file is not None:
             kwargs["initialfile"] = initial_file
+
+        if parent is not None:
+            kwargs["parent"] = parent
 
         if self._handletype.lower() in (
                 "open", "save", "filename", "filename_multi", "save_filename"):
@@ -293,20 +295,20 @@ class FileHandler():  # pylint:disable=too-few-public-methods
             The variable associated with this file dialog
         """
         if self._contexts[command].get(variable, None) is not None:
-            handletype = cast(Dict[str, Dict[str, Dict[str, str]]],
-                              self._contexts)[command][variable][action]
+            handletype = T.cast(dict[str, dict[str, dict[str, str]]],
+                                self._contexts)[command][variable][action]
         else:
-            handletype = cast(Dict[str, Dict[str, str]],
-                              self._contexts)[command][action]
+            handletype = T.cast(dict[str, dict[str, str]],
+                                self._contexts)[command][action]
         logger.debug(handletype)
-        self._handletype = cast(_HANDLETYPE, handletype)
+        self._handletype = T.cast(_HANDLETYPE, handletype)
 
-    def _open(self) -> Optional[IO]:
+    def _open(self) -> T.IO | None:
         """ Open a file. """
         logger.debug("Popping Open browser")
         return filedialog.askopenfile(**self._kwargs)  # type: ignore
 
-    def _save(self) -> Optional[IO]:
+    def _save(self) -> T.IO | None:
         """ Save a file. """
         logger.debug("Popping Save browser")
         return filedialog.asksaveasfile(**self._kwargs)  # type: ignore
@@ -314,30 +316,30 @@ class FileHandler():  # pylint:disable=too-few-public-methods
     def _dir(self) -> str:
         """ Get a directory location. """
         logger.debug("Popping Dir browser")
-        return filedialog.askdirectory(**self._kwargs)
+        return filedialog.askdirectory(**self._kwargs)  # type: ignore
 
     def _savedir(self) -> str:
         """ Get a save directory location. """
         logger.debug("Popping SaveDir browser")
-        return filedialog.askdirectory(**self._kwargs)
+        return filedialog.askdirectory(**self._kwargs)  # type: ignore
 
     def _filename(self) -> str:
         """ Get an existing file location. """
         logger.debug("Popping Filename browser")
-        return filedialog.askopenfilename(**self._kwargs)
+        return filedialog.askopenfilename(**self._kwargs)  # type: ignore
 
-    def _filename_multi(self) -> Tuple[str, ...]:
+    def _filename_multi(self) -> tuple[str, ...]:
         """ Get multiple existing file locations. """
         logger.debug("Popping Filename browser")
-        return filedialog.askopenfilenames(**self._kwargs)
+        return filedialog.askopenfilenames(**self._kwargs)  # type: ignore
 
     def _save_filename(self) -> str:
         """ Get a save file location. """
         logger.debug("Popping Save Filename browser")
-        return filedialog.asksaveasfilename(**self._kwargs)
+        return filedialog.asksaveasfilename(**self._kwargs)  # type: ignore
 
     @staticmethod
-    def _nothing() -> None:  # pylint: disable=useless-return
+    def _nothing() -> None:  # pylint:disable=useless-return
         """ Method that does nothing, used for disabling open/save pop up.  """
         logger.debug("Popping Nothing browser")
         return

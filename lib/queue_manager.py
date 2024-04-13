@@ -6,12 +6,11 @@
 
 import logging
 import threading
-from typing import Dict
 
-from queue import Queue, Empty as QueueEmpty  # pylint: disable=unused-import; # noqa
+from queue import Queue, Empty as QueueEmpty  # pylint:disable=unused-import; # noqa
 from time import sleep
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
 class EventQueue(Queue):
@@ -45,7 +44,7 @@ class _QueueManager():
         logger.debug("Initializing %s", self.__class__.__name__)
 
         self.shutdown = threading.Event()
-        self.queues: Dict[str, EventQueue] = {}
+        self.queues: dict[str, EventQueue] = {}
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def add_queue(self, name: str, maxsize: int = 0, create_new: bool = False) -> str:
@@ -175,4 +174,4 @@ class _QueueManager():
             sleep(update_interval)
 
 
-queue_manager = _QueueManager()  # pylint: disable=invalid-name
+queue_manager = _QueueManager()  # pylint:disable=invalid-name

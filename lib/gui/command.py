@@ -9,8 +9,9 @@ from tkinter import ttk
 from .control_helper import ControlPanel
 from .custom_widgets import Tooltip
 from .utils import get_images, get_config
+from .options import CliOption
 
-logger = logging.getLogger(__name__)  # pylint:disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
@@ -129,7 +130,7 @@ class CommandTab(ttk.Frame):  # pylint:disable=too-many-ancestors
         """ Build the tab """
         logger.debug("Build Tab: '%s'", self.command)
         options = get_config().cli_opts.opts[self.command]
-        cp_opts = [val["cpanel_option"] for key, val in options.items() if key != "helptext"]
+        cp_opts = [val.cpanel_option for val in options.values() if isinstance(val, CliOption)]
         ControlPanel(self,
                      cp_opts,
                      label_width=16,

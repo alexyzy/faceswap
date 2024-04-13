@@ -14,7 +14,6 @@ from urllib.request import urlretrieve
 import os
 from os.path import join as pathjoin, expanduser
 
-_TRAIN_ARGS = (1, 1) if os.environ.get("FACESWAP_BACKEND", "cpu").lower() == "amd" else (4, 4)
 FAIL_COUNT = 0
 TEST_COUNT = 0
 _COLORS = {
@@ -95,7 +94,7 @@ def train_args(model, model_path, faces, iterations=1, batchsize=2, extra_args="
     """ Train command """
     py_exe = sys.executable
     args = (f"{py_exe} faceswap.py train -A {faces} -B {faces} -m {model_path} -t {model} "
-            f"-bs {batchsize} -it {iterations} {extra_args}")
+            f"-b {batchsize} -i {iterations} {extra_args}")
     return args.split()
 
 
@@ -109,11 +108,10 @@ def convert_args(in_path, out_path, model_path, writer, args=None):
     return conv_args.split()  # Don't use pathes with spaces ;)
 
 
-def sort_args(in_path, out_path, sortby="face", groupby="hist", method="rename"):
+def sort_args(in_path, out_path, sortby="face", groupby="hist"):
     """ Sort command """
     py_exe = sys.executable
-    _sort_args = (f"{py_exe} tools.py sort -i {in_path} -o {out_path} -s {sortby} -fp {method} "
-                  f"-g {groupby} -k")
+    _sort_args = (f"{py_exe} tools.py sort -i {in_path} -o {out_path} -s {sortby} -g {groupby} -k")
     return _sort_args.split()
 
 
@@ -184,7 +182,7 @@ def main():
             "Sort faces.",
             sort_args(
                 pathjoin(vid_base, "faces"), pathjoin(vid_base, "faces_sorted"),
-                sortby="face", method="rename"
+                sortby="face"
             )
         )
 
@@ -193,7 +191,7 @@ def main():
             (
                 py_exe, "tools.py", "alignments", "-j", "rename",
                 "-a", pathjoin(vid_base, "test_alignments.fsa"),
-                "-fc", pathjoin(vid_base, "faces_sorted"),
+                "-c", pathjoin(vid_base, "faces_sorted"),
             )
         )
         set_train_config(True)
@@ -202,9 +200,9 @@ def main():
             train_args("lightweight",
                        pathjoin(vid_base, "model"),
                        pathjoin(vid_base, "faces"),
-                       iterations=_TRAIN_ARGS[0],
-                       batchsize=_TRAIN_ARGS[1],
-                       extra_args="-wl"))
+                       iterations=1,
+                       batchsize=1,
+                       extra_args="-M"))
 
         set_train_config(False)
         was_trained = run_test(
@@ -212,9 +210,8 @@ def main():
             train_args("lightweight",
                        pathjoin(vid_base, "model"),
                        pathjoin(vid_base, "faces"),
-                       iterations=_TRAIN_ARGS[0],
-                       batchsize=_TRAIN_ARGS[1],
-                       extra_args="-wl"))
+                       iterations=1,
+                       batchsize=1))
 
     if was_trained:
         run_test(

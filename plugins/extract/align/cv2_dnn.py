@@ -23,15 +23,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+from __future__ import annotations
 import logging
-from typing import cast, List, Tuple, TYPE_CHECKING
+import typing as T
 
 import cv2
 import numpy as np
 
 from ._base import Aligner, AlignerBatch, BatchType
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from lib.align.detected_face import DetectedFace
 
 logger = logging.getLogger(__name__)
@@ -45,17 +46,34 @@ class Align(Aligner):
         super().__init__(git_model_id=git_model_id, model_filename=model_filename, **kwargs)
 
         self.model: cv2.dnn.Net
+        self.model_path: str
         self.name = "cv2-DNN Aligner"
         self.input_size = 128
         self.color_format = "RGB"
         self.vram = 0  # Doesn't use GPU
         self.vram_per_batch = 0
         self.batchsize = 1
+        self.realign_centering = "legacy"
 
     def init_model(self) -> None:
         """ Initialize CV2 DNN Detector Model"""
-        self.model = cv2.dnn.readNetFromTensorflow(self.model_path)  # pylint: disable=no-member
-        self.model.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)  # pylint: disable=no-member
+        self.model = cv2.dnn.readNetFromTensorflow(self.model_path)
+        self.model.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+    def faces_to_feed(self, faces: np.ndarray) -> np.ndarray:
+        """ Convert a batch of face images from UINT8 (0-255) to fp32 (0.0-255.0)
+
+        Parameters
+        ----------
+        faces: :class:`numpy.ndarray`
+            The batch of faces in UINT8 format
+
+        Returns
+        -------
+        class: `numpy.ndarray`
+            The batch of faces as fp32
+        """
+        return faces.astype("float32").transpose((0, 3, 1, 2))
 
     def process_input(self, batch: BatchType) -> None:
         """ Compile the detected faces for prediction
@@ -71,12 +89,11 @@ class Align(Aligner):
             The batch item with the :attr:`feed` populated and any required :attr:`data` added
         """
         assert isinstance(batch, AlignerBatch)
-        faces, roi, offsets = self.align_image(batch)
-        faces = self._normalize_faces(faces)
-        batch.data.append(dict(roi=roi, offsets=offsets))
-        batch.feed = np.array(faces, dtype="float32")[..., :3].transpose((0, 3, 1, 2))
+        lfaces, roi, offsets = self.align_image(batch)
+        batch.feed = np.array(lfaces)[..., :3]
+        batch.data.append({"roi": roi, "offsets": offsets})
 
-    def _get_box_and_offset(self, face: "DetectedFace") -> Tuple[List[int], int]:
+    def _get_box_and_offset(self, face: DetectedFace) -> tuple[list[int], int]:
         """Obtain the bounding box and offset from a detected face.
 
 
@@ -93,17 +110,17 @@ class Align(Aligner):
             The offset of the box (difference between half width vs height)
         """
 
-        box = cast(List[int], [face.left,
-                               face.top,
-                               face.right,
-                               face.bottom])
-        diff_height_width = cast(int, face.height) - cast(int, face.width)
+        box = T.cast(list[int], [face.left,
+                                 face.top,
+                                 face.right,
+                                 face.bottom])
+        diff_height_width = T.cast(int, face.height) - T.cast(int, face.width)
         offset = int(abs(diff_height_width / 2))
         return box, offset
 
-    def align_image(self, batch: AlignerBatch) -> Tuple[List[np.ndarray],
-                                                        List[List[int]],
-                                                        List[Tuple[int, int]]]:
+    def align_image(self, batch: AlignerBatch) -> tuple[list[np.ndarray],
+                                                        list[list[int]],
+                                                        list[tuple[int, int]]]:
         """ Align the incoming image for prediction
 
         Parameters
@@ -120,7 +137,7 @@ class Align(Aligner):
         offsets: list
             List of offsets for the faces
         """
-        logger.trace("Aligning image around center")  # type:ignore
+        logger.trace("Aligning image around center")  # type:ignore[attr-defined]
         sizes = (self.input_size, self.input_size)
         rois = []
         faces = []
@@ -144,8 +161,8 @@ class Align(Aligner):
 
     @classmethod
     def move_box(cls,
-                 box: List[int],
-                 offset: Tuple[int, int]) -> List[int]:
+                 box: list[int],
+                 offset: tuple[int, int]) -> list[int]:
         """Move the box to direction specified by vector offset
 
         Parameters
@@ -167,7 +184,7 @@ class Align(Aligner):
         return [left, top, right, bottom]
 
     @staticmethod
-    def get_square_box(box: List[int]) -> List[int]:
+    def get_square_box(box: list[int]) -> list[int]:
         """Get a square box out of the given box, by expanding it.
 
         Parameters
@@ -211,7 +228,7 @@ class Align(Aligner):
         return [left, top, right, bottom]
 
     @classmethod
-    def pad_image(cls, box: List[int], image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int]]:
+    def pad_image(cls, box: list[int], image: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
         """Pad image if face-box falls outside of boundaries
 
         Parameters
@@ -231,7 +248,7 @@ class Align(Aligner):
         pad_t = 1 - box[1] if box[1] < 0 else 0
         pad_r = box[2] - width if box[2] > width else 0
         pad_b = box[3] - height if box[3] > height else 0
-        logger.trace("Padding: (l: %s, t: %s, r: %s, b: %s)",  # type:ignore
+        logger.trace("Padding: (l: %s, t: %s, r: %s, b: %s)",  # type:ignore[attr-defined]
                      pad_l, pad_t, pad_r, pad_b)
         padded_image = cv2.copyMakeBorder(image.copy(),
                                           pad_t,
@@ -241,7 +258,8 @@ class Align(Aligner):
                                           cv2.BORDER_CONSTANT,
                                           value=(0, 0, 0))
         offsets = (pad_l - pad_r, pad_t - pad_b)
-        logger.trace("image_shape: %s, Padded shape: %s, box: %s, offsets: %s",  # type:ignore
+        logger.trace("image_shape: %s, Padded shape: %s, box: %s, "  # type:ignore[attr-defined]
+                     "offsets: %s",
                      image.shape, padded_image.shape, box, offsets)
         return padded_image, offsets
 
@@ -274,8 +292,7 @@ class Align(Aligner):
         assert isinstance(batch, AlignerBatch)
         self.get_pts_from_predict(batch)
 
-    @classmethod
-    def get_pts_from_predict(cls, batch: AlignerBatch):
+    def get_pts_from_predict(self, batch: AlignerBatch):
         """ Get points from predictor and populates the :attr:`landmarks` property
 
         Parameters
@@ -284,13 +301,16 @@ class Align(Aligner):
             The current batch from the model with :attr:`predictions` populated
         """
         landmarks = []
-        for prediction, roi, offset in zip(batch.prediction,
-                                           batch.data[0]["roi"],
-                                           batch.data[0]["offsets"]):
-            points = np.reshape(prediction, (-1, 2))
-            points *= (roi[2] - roi[0])
-            points[:, 0] += (roi[0] - offset[0])
-            points[:, 1] += (roi[1] - offset[1])
-            landmarks.append(points)
-        batch.landmarks = np.array(landmarks)
-        logger.trace("Predicted Landmarks: %s", batch.landmarks)  # type:ignore
+        if batch.second_pass:
+            batch.landmarks = batch.prediction.reshape(self.batchsize, -1, 2) * self.input_size
+        else:
+            for prediction, roi, offset in zip(batch.prediction,
+                                               batch.data[0]["roi"],
+                                               batch.data[0]["offsets"]):
+                points = np.reshape(prediction, (-1, 2))
+                points *= (roi[2] - roi[0])
+                points[:, 0] += (roi[0] - offset[0])
+                points[:, 1] += (roi[1] - offset[1])
+                landmarks.append(points)
+            batch.landmarks = np.array(landmarks)
+        logger.trace("Predicted Landmarks: %s", batch.landmarks)  # type:ignore[attr-defined]

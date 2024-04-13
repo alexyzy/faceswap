@@ -9,12 +9,12 @@ from matplotlib import font_manager
 
 from lib.config import FaceswapConfig
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
 class Config(FaceswapConfig):
     """ Config File for GUI """
-    # pylint: disable=too-many-statements
+    # pylint:disable=too-many-statements
     def set_defaults(self):
         """ Set the default values for config """
         logger.debug("Setting defaults")
@@ -26,9 +26,9 @@ class Config(FaceswapConfig):
         """
         logger.debug("Setting global config")
         section = "global"
-        self.add_section(title=section,
-                         info="Faceswap GUI Options.\nConfigure the appearance and behaviour of "
-                              "the GUI")
+        self.add_section(section,
+                         "Faceswap GUI Options.\nConfigure the appearance and behaviour of "
+                         "the GUI")
         self.add_item(
             section=section, title="fullscreen", datatype=bool, default=False, group="startup",
             info="Start Faceswap maximized.")

@@ -5,17 +5,17 @@ import logging
 import re
 
 import tkinter as tk
+import typing as T
 from tkinter import colorchooser, ttk
 from itertools import zip_longest
 from functools import partial
-from typing import Any, Dict
 
 from _tkinter import Tcl_Obj, TclError
 
 from .custom_widgets import ContextMenu, MultiOption, ToggledFrame, Tooltip
 from .utils import FileHandler, get_config, get_images
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
@@ -24,7 +24,9 @@ _ = _LANG.gettext
 # We store Tooltips, ContextMenus and Commands globally when they are created
 # Because we need to add them back to newly cloned widgets (they are not easily accessible from
 # original config or are prone to getting destroyed when the original widget is destroyed)
-_RECREATE_OBJECTS: Dict[str, Dict[str, Any]] = dict(tooltips={}, commands={}, contextmenus={})
+_RECREATE_OBJECTS: dict[str, dict[str, T.Any]] = {"tooltips": {},
+                                                  "commands": {},
+                                                  "contextmenus": {}}
 
 
 def _get_tooltip(widget, text=None, text_variable=None):
@@ -154,17 +156,17 @@ class ControlPanelOption():
         self.dtype = dtype
         self.sysbrowser = sysbrowser
         self._command = command
-        self._options = dict(title=title,
-                             subgroup=subgroup,
-                             group=group,
-                             default=default,
-                             initial_value=initial_value,
-                             choices=choices,
-                             is_radio=is_radio,
-                             is_multi_option=is_multi_option,
-                             rounding=rounding,
-                             min_max=min_max,
-                             helptext=helptext)
+        self._options = {"title": title,
+                         "subgroup": subgroup,
+                         "group": group,
+                         "default": default,
+                         "initial_value": initial_value,
+                         "choices": choices,
+                         "is_radio": is_radio,
+                         "is_multi_option": is_multi_option,
+                         "rounding": rounding,
+                         "min_max": min_max,
+                         "helptext": helptext}
         self.control = self.get_control()
         self.tk_var = self.get_tk_var(initial_value, track_modified)
         logger.debug("Initialized %s", self.__class__.__name__)
@@ -421,7 +423,7 @@ class ControlPanel(ttk.Frame):  # pylint:disable=too-many-ancestors
         self.group_frames = {}
         self._sub_group_frames = {}
 
-        canvas_kwargs = dict(bd=0, highlightthickness=0, bg=self._theme["panel_background"])
+        canvas_kwargs = {"bd": 0, "highlightthickness": 0, "bg": self._theme["panel_background"]}
 
         self._canvas = tk.Canvas(self, **canvas_kwargs)
         self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -525,8 +527,8 @@ class ControlPanel(ttk.Frame):  # pylint:disable=too-many-ancestors
 
             group_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5, anchor=tk.NW)
 
-            self.group_frames[group] = dict(frame=retval,
-                                            chkbtns=self.checkbuttons_frame(retval))
+            self.group_frames[group] = {"frame": retval,
+                                        "chkbtns": self.checkbuttons_frame(retval)}
         group_frame = self.group_frames[group]
         return group_frame
 
@@ -541,7 +543,7 @@ class ControlPanel(ttk.Frame):  # pylint:disable=too-many-ancestors
         self.mainframe.bind("<Configure>", self.update_scrollbar)
         logger.debug("Added Config Scrollbar")
 
-    def update_scrollbar(self, event):  # pylint: disable=unused-argument
+    def update_scrollbar(self, event):  # pylint:disable=unused-argument
         """ Update the options frame scrollbar """
         self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
@@ -720,12 +722,12 @@ class AutoFillContainer():
         """
         retval = {}
         if widget.__class__.__name__ == "MultiOption":
-            retval = dict(value=widget._value,  # pylint:disable=protected-access
-                          variable=widget._master_variable)  # pylint:disable=protected-access
+            retval = {"value": widget._value,  # pylint:disable=protected-access
+                      "variable": widget._master_variable}  # pylint:disable=protected-access
         elif widget.__class__.__name__ == "ToggledFrame":
             # Toggled Frames need to have their variable tracked
-            retval = dict(text=widget._text,  # pylint:disable=protected-access
-                          toggle_var=widget._toggle_var)  # pylint:disable=protected-access
+            retval = {"text": widget._text,  # pylint:disable=protected-access
+                      "toggle_var": widget._toggle_var}  # pylint:disable=protected-access
         return retval
 
     def get_all_children_config(self, widget, child_list):
@@ -906,7 +908,7 @@ class ControlBuilder():
     blank_nones: bool
         Sets selected values to an empty string rather than None if this is true.
     """
-    def __init__(self, parent, option, option_columns,  # pylint: disable=too-many-arguments
+    def __init__(self, parent, option, option_columns,  # pylint:disable=too-many-arguments
                  label_width, checkbuttons_frame, style, blank_nones):
         logger.debug("Initializing %s: (parent: %s, option: %s, option_columns: %s, "
                      "label_width: %s, checkbuttons_frame: %s, style: %s, blank_nones: %s)",
@@ -988,7 +990,7 @@ class ControlBuilder():
         if self.option.control != ttk.Checkbutton:
             ctl.pack(padx=5, pady=5, fill=tk.X, expand=True)
             if self.option.helptext is not None and not self.helpset:
-                tooltip_kwargs = dict(text=self.option.helptext)
+                tooltip_kwargs = {"text": self.option.helptext}
                 if self.option.sysbrowser is not None:
                     tooltip_kwargs["text_variable"] = self.option.tk_var
                 _get_tooltip(ctl, **tooltip_kwargs)
@@ -1071,7 +1073,7 @@ class ControlBuilder():
                      "rounding: %s, min_max: %s)", self.option.name, self.option.dtype,
                      self.option.rounding, self.option.min_max)
         validate = self.slider_check_int if self.option.dtype == int else self.slider_check_float
-        vcmd = (self.frame.register(validate))
+        vcmd = self.frame.register(validate)
         tbox = tk.Entry(self.frame,
                         width=8,
                         textvariable=self.option.tk_var,
@@ -1179,34 +1181,35 @@ class ControlBuilder():
         logger.debug("Add control to Options Frame: (widget: '%s', control: %s, choices: %s)",
                      self.option.name, self.option.control, self.option.choices)
         frame = ttk.Frame(self.frame, style=f"{self._style}Group.TFrame")
-        ctl = tk.Frame(frame,
-                       bg=self.option.default,
-                       bd=2,
-                       cursor="hand2",
-                       relief=tk.SUNKEN,
-                       width=round(int(20 * get_config().scaling_factor)),
-                       height=round(int(12 * get_config().scaling_factor)))
-        ctl.bind("<Button-1>", lambda *e, c=ctl, t=self.option.title: self._ask_color(c, t))
-        ctl.pack(side=tk.LEFT, anchor=tk.W)
         lbl = ttk.Label(frame,
                         text=self.option.title,
                         width=self.label_width,
                         anchor=tk.W,
                         style=f"{self._style}Group.TLabel")
-        lbl.pack(padx=2, pady=5, side=tk.RIGHT, anchor=tk.N)
-        frame.pack(side=tk.LEFT, anchor=tk.W)
+        ctl = tk.Frame(frame,
+                       bg=self.option.tk_var.get(),
+                       bd=2,
+                       cursor="hand2",
+                       relief=tk.SUNKEN,
+                       width=round(int(20 * get_config().scaling_factor)),
+                       height=round(int(14 * get_config().scaling_factor)))
+        ctl.bind("<Button-1>", lambda *e, c=ctl, t=self.option.title: self._ask_color(c, t))
+        lbl.pack(side=tk.LEFT, anchor=tk.N)
+        ctl.pack(side=tk.RIGHT, anchor=tk.W)
+        frame.pack(padx=5, side=tk.LEFT, anchor=tk.W)
         if self.option.helptext is not None:
-            _get_tooltip(lbl, text=self.option.helptext)
+            _get_tooltip(frame, text=self.option.helptext)
+        # Callback to set the color chooser background on an update (e.g. reset)
+        self.option.tk_var.trace("w", lambda *e: ctl.config(bg=self.option.tk_var.get()))
         logger.debug("Added control to Options Frame: %s", self.option.name)
         return ctl
 
     def _ask_color(self, frame, title):
         """ Pop ask color dialog set to variable and change frame color """
         color = self.option.tk_var.get()
-        chosen = colorchooser.askcolor(color=color, title=f"{title} Color")[1]
+        chosen = colorchooser.askcolor(parent=frame, color=color, title=f"{title} Color")[1]
         if chosen is None:
             return
-        frame.config(bg=chosen)
         self.option.tk_var.set(chosen)
 
     def control_to_checkframe(self):
@@ -1245,15 +1248,15 @@ class FileBrowser():
     @property
     def helptext(self):
         """ Dict containing tooltip text for buttons """
-        retval = dict(folder=_("Select a folder..."),
-                      load=_("Select a file..."),
-                      load2=_("Select a file..."),
-                      picture=_("Select a folder of images..."),
-                      video=_("Select a video..."),
-                      model=_("Select a model folder..."),
-                      multi_load=_("Select one or more files..."),
-                      context=_("Select a file or folder..."),
-                      save_as=_("Select a save location..."))
+        retval = {"folder": _("Select a folder..."),
+                  "load": _("Select a file..."),
+                  "load2": _("Select a file..."),
+                  "picture": _("Select a folder of images..."),
+                  "video": _("Select a video..."),
+                  "model": _("Select a model folder..."),
+                  "multi_load": _("Select one or more files..."),
+                  "context": _("Select a file or folder..."),
+                  "save_as": _("Select a save location...")}
         return retval
 
     @staticmethod
