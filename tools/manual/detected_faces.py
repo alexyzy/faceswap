@@ -58,6 +58,8 @@ class DetectedFaces():
         self._updated_frame_indices: set[int] = set()
 
         self._alignments: Alignments = self._get_alignments(alignments_path, input_location)
+        self._alignments.update_legacy_has_source(os.path.basename(input_location))
+
         self._extractor = extractor
         self._tk_vars = self._set_tk_vars()
 
@@ -684,7 +686,7 @@ class FaceUpdate():
                      width: int,
                      pnt_y: int,
                      height: int,
-                     aligner: T.Literal["cv2-dnn", "FAN"] = "FAN") -> None:
+                     aligner: manual.TypeManualExtractor = "FAN") -> None:
         """ Update the bounding box for the :class:`~lib.align.DetectedFace` object at the
         given frame and face indices, with the given dimensions and update the 68 point landmarks
         from the :class:`~tools.manual.manual.Aligner` for the updated bounding box.

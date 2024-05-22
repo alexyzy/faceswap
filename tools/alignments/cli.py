@@ -40,20 +40,21 @@ class AlignmentsArgs(FaceSwapArgs):
         dict
             The argparse command line options for processing by argparse
         """
-        frames_dir = _(" Must Pass in a frames folder/source video file (-fr).")
-        faces_dir = _(" Must Pass in a faces folder (-fc).")
+        frames_dir = _(" Must Pass in a frames folder/source video file (-r).")
+        faces_dir = _(" Must Pass in a faces folder (-c).")
         frames_or_faces_dir = _(" Must Pass in either a frames folder/source video file OR a "
-                                "faces folder (-fr or -fc).")
+                                "faces folder (-r or -c).")
         frames_and_faces_dir = _(" Must Pass in a frames folder/source video file AND a faces "
-                                 "folder (-fr and -fc).")
+                                 "folder (-r and -c).")
         output_opts = _(" Use the output option (-o) to process results.")
         argument_list = []
         argument_list.append({
             "opts": ("-j", "--job"),
             "action": Radio,
             "type": str,
-            "choices": ("draw", "extract", "from-faces", "missing-alignments", "missing-frames",
-                        "multi-faces", "no-faces", "remove-faces", "rename", "sort", "spatial"),
+            "choices": ("draw", "extract", "export", "from-faces", "missing-alignments",
+                        "missing-frames", "multi-faces", "no-faces", "remove-faces", "rename",
+                        "sort", "spatial"),
             "group": _("processing"),
             "required": True,
             "help": _(
@@ -61,6 +62,12 @@ class AlignmentsArgs(FaceSwapArgs):
                 "alignments file (-a) to be passed in."
                 "\nL|'draw': Draw landmarks on frames in the selected folder/video. A "
                 "subfolder will be created within the frames folder to hold the output.{0}"
+                "\nL|'export': Export the contents of an alignments file to a json file. Can be "
+                "used for editing alignment information in external tools and then re-importing "
+                "by using Faceswap's Extract 'Import' plugins. Note: masks and identity vectors "
+                "will not be included in the exported file, so will be re-generated when the json "
+                "file is imported back into Faceswap. All data is exported with the origin (0, 0) "
+                "at the top left of the canvas."
                 "\nL|'extract': Re-extract faces from the source frames/video based on "
                 "alignment data. This is a lot quicker than re-detecting faces. Can pass in "
                 "the '-een' (--extract-every-n) parameter to only extract every nth frame.{1}"
@@ -111,7 +118,7 @@ class AlignmentsArgs(FaceSwapArgs):
             "group": _("data"),
             # hacky solution to not require alignments file if creating alignments from faces:
             "required": not any(val in sys.argv for val in ["from-faces",
-                                                            "-fr",
+                                                            "-r",
                                                             "-frames_folder"]),
             "filetypes": "alignments",
             "help": _(
@@ -201,17 +208,17 @@ class AlignmentsArgs(FaceSwapArgs):
         argument_list.append({
             "opts": ("-fc", ),
             "type": str,
-            "dest": "depr_faces_dir_fc_c",
+            "dest": "depr_faces_folder_fc_c",
             "help": argparse.SUPPRESS})
         argument_list.append({
             "opts": ("-fr", ),
             "type": str,
-            "dest": "depr_extract_every_n_een_N",
+            "dest": "depr_extract-every-n_een_N",
             "help": argparse.SUPPRESS})
         argument_list.append({
             "opts": ("-een", ),
             "type": int,
-            "dest": "depr_frames_dir_fr_r",
+            "dest": "depr_faces_folder_fr_r",
             "help": argparse.SUPPRESS})
         argument_list.append({
             "opts": ("-sz", ),

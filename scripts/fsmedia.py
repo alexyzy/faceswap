@@ -25,7 +25,7 @@ if T.TYPE_CHECKING:
     from collections.abc import Generator
     from argparse import Namespace
     from lib.align import AlignedFace
-    from plugins.extract.pipeline import ExtractMedia
+    from plugins.extract import ExtractMedia
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def finalize(images_found: int, num_faces_detected: int, verify_output: bool) ->
         logger.info("Double check your results.")
         logger.info("-------------------------")
 
-    logger.info("Process Succesfully Completed. Shutting Down...")
+    logger.info("Process Successfully Completed. Shutting Down...")
 
 
 class Alignments(AlignmentsBase):
@@ -287,12 +287,12 @@ class Images():
             A single frame
         """
         logger.debug("Input is video. Capturing frames")
-        vidname = os.path.splitext(os.path.basename(self._args.input_dir))[0]
+        vidname, ext = os.path.splitext(os.path.basename(self._args.input_dir))
         reader = imageio.get_reader(self._args.input_dir, "ffmpeg")  # type:ignore[arg-type]
         for i, frame in enumerate(T.cast(Iterator[np.ndarray], reader)):
             # Convert to BGR for cv2 compatibility
             frame = frame[:, :, ::-1]
-            filename = f"{vidname}_{i + 1:06d}.png"
+            filename = f"{vidname}_{i + 1:06d}{ext}"
             logger.trace("Loading video frame: '%s'", filename)  # type:ignore[attr-defined]
             yield filename, frame
         reader.close()
@@ -414,14 +414,15 @@ class PostProcess():
 
         Parameters
         ----------
-        extract_media: :class:`~plugins.extract.pipeline.ExtractMedia`
-            The :class:`~plugins.extract.pipeline.ExtractMedia` object to perform the
+        extract_media: :class:`~plugins.extract.extract_media.ExtractMedia`
+            The :class:`~plugins.extract.extract_media.ExtractMedia` object to perform the
             action on.
 
         Returns
         -------
-        :class:`~plugins.extract.pipeline.ExtractMedia`
-            The original :class:`~plugins.extract.pipeline.ExtractMedia` with any actions applied
+        :class:`~plugins.extract.extract_media.ExtractMedia`
+            The original :class:`~plugins.extract.extract_media.ExtractMedia` with any actions
+            applied
         """
         for action in self._actions:
             logger.debug("Performing postprocess action: '%s'", action.__class__.__name__)
@@ -458,8 +459,8 @@ class PostProcessAction():
 
         Parameters
         ----------
-        extract_media: :class:`~plugins.extract.pipeline.ExtractMedia`
-            The :class:`~plugins.extract.pipeline.ExtractMedia` object to perform the
+        extract_media: :class:`~plugins.extract.extract_media.ExtractMedia`
+            The :class:`~plugins.extract.extract_media.ExtractMedia` object to perform the
             action on.
         """
         raise NotImplementedError
@@ -578,9 +579,9 @@ class DebugLandmarks(PostProcessAction):
 
         Parameters
         ----------
-        extract_media: :class:`~plugins.extract.pipeline.ExtractMedia`
-            The :class:`~plugins.extract.pipeline.ExtractMedia` object that contains the faces to
-            draw the landmarks on to
+        extract_media: :class:`~plugins.extract.extract_media.ExtractMedia`
+            The :class:`~plugins.extract.extract_media.ExtractMedia` object that contains the faces
+            to draw the landmarks on to
         """
         frame = os.path.splitext(os.path.basename(extract_media.filename))[0]
         for idx, face in enumerate(extract_media.detected_faces):
